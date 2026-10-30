@@ -1,0 +1,74 @@
+# Ken config — copy to ~/.ken/config.yaml and fill in your own values.
+#
+#   cp engine/config.example.yaml ~/.ken/config.yaml
+#
+# Your real ~/.ken/config.yaml is private and is never committed. This example
+# holds placeholders only — never put a real secret in a tracked file.
+
+# LLM provider (optional). With a key the assistant holds a real conversation;
+# without one, `tell` reports are not processed (outcome no_model) and writes are not
+# judged; the typed MCP writes still work.
+#
+# Models are chosen by TIER: a tier maps to a model, and each agent picks a tier.
+# Change a tier here and every agent on it moves together. To pin one agent to a
+# specific model, add it under `overrides` (by agent name) — that wins over its tier.
+llm:
+  provider: "openai"
+  api_key: "YOUR_OPENAI_API_KEY"
+  tiers:
+    fast: "gpt-5.6-luna"          # chat and simple work (the assistant, the judge fallback)
+    reasoning: "gpt-5.6-terra"    # real reasoning (e.g. a Garden agent)
+  # overrides:                    # optional — pin one agent to any model
+  #   GardenAgent: "gpt-5.6-sol"
+  # api_style: "chat"             # tool calls over /v1/chat/completions, for a host with no /v1/responses (default: responses)
+
+# No API key? Already paying for Claude? Use your own Claude Code login instead: the engine
+# runs `claude -p` (headless Claude Code) on this machine. Install Claude Code, run `claude`
+# once to log in, then replace the block above with:
+# llm:
+#   provider: "claude-code"
+#   tiers:
+#     fast: "sonnet"              # the judge, chat
+#     reasoning: "opus"           # the assistant's reasoning
+#   # reasoning_effort: "high"    # optional: low | medium | high | xhigh | max
+#   # claude_bin: "/path/to/claude"   # optional, when `claude` is not on PATH
+# Each call starts a process, so an answer takes a few seconds more than an API call.
+# For your own machine only: a hosted service for other people needs an API key.
+
+# OpenAI Decisions — typed, calibrated answers. ON BY DEFAULT whenever llm is OpenAI with a
+# real key: it is the consent judge (keep / collapse / conflict) and ranks kip's Today lanes;
+# the LLM judge answers only when a Decisions call fails. It bills per input token (about
+# $0.10 per 1M). Any other provider or base_url (claude-code, OpenRouter, Ollama) leaves it off.
+# decisions:
+#   enabled: false        # turn it off
+#   model: "gpt-6-luna"
+
+
+# The MCP server over HTTP (`ken-mcp --http`) — for the Claude app connector, another
+# machine's Claude Code, or an agent of your own. The token that authenticates a call sets
+# how much its writes are trusted: `token` is YOURS (writes may carry your provenance);
+# `agent_tokens` are for agents you run (their writes are world input at most, carded when
+# in doubt). Always set a token before binding beyond localhost or tunnelling out.
+# http:
+#   host: 0.0.0.0            # or "*" = every interface, IPv4 and IPv6 (an IPv6-only network)
+#   port: 8765
+#   token: "YOUR_SECRET"
+#   agent_tokens:
+#     codex: "ANOTHER_SECRET"
+
+# You. get_context never reports your own name as an unknown person.
+# user:
+#   name: Alex
+
+# Push at 09:00 (`ken push`, run by launchd/cron): the open cards as one short message to
+# any endpoint that takes a text body — an ntfy topic, a webhook, an iOS Shortcut URL.
+# Nothing waits → nothing is sent. See the README section "Cards in the terminal and a morning push".
+# push:
+#   url: https://ntfy.sh/<your-private-topic>
+#   headers: {Title: Ken}
+
+# The assistant's memory preload (optional). "full" sends every note in full on every turn.
+# "index" sends one line per record, opens the records a message names, and lets the model
+# read any other full note with a tool. About half the input tokens on a filled world.
+# assistant:
+#   preload: "index"

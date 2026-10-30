@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Node / CLI
+node_modules/
+cli/dist/
+
+# Runtime + secrets — private, never committed (lives in ~/.ken)
+.env
+*.db
+*.sqlite
+*.sqlite3
+.ken/
+# a real config must never be committed — only config.example.yaml is tracked
+config.yaml
+*.local.yaml
+*.secret.yaml
+# rotating OAuth token stores live in ~/.ken, never in the repo
+*_tokens.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+.gstack/

@@ -180,4 +180,5 @@ defining **one** class that subclasses `Agent`. It sets `name`, `triggers` (`OnM
 `Advice(text)`, a `Proposal`, or `None`; it fetches its own data through `Tool`s (an API, an
 MCP server); add an `llm` param to `__init__` for a model, `rank` for a Decisions ranker, and
 `act()` to perform an approved `act:` proposal. Put it in `~/.ken/agents/`. Verify with
-`ken agents`. Do not edit anything under `engine/`.
+`ken agents`. Do not edit anything under `engine/`. Any test data or example you write is
+fictional: no real people, companies, numbers or chats.

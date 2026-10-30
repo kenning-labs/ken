@@ -26,7 +26,8 @@ The engine lives in `engine/` and needs Python 3.11 or newer (a stock Mac ships 
 
 ```bash
 cd engine
-python3.12 -m venv .venv    # any python3.11+ works && .venv/bin/pip install -e '.[dev]'
+python3.12 -m venv .venv    # any python3.11+ works
+.venv/bin/pip install -e '.[dev,mcp]'
 .venv/bin/python -m pytest   # run the tests
 .venv/bin/python -m ruff check .
 ```
@@ -34,6 +35,9 @@ python3.12 -m venv .venv    # any python3.11+ works && .venv/bin/pip install -e 
 - Keep changes focused; one concern per pull request.
 - Add or update tests for behavior you change.
 - Run the tests and the linter before opening a PR.
+- Test data, evals and examples are fictional: invented people, companies, numbers and ticket
+  ids. Never paste real chats, names or work data, even "lightly trimmed". CI scans every push
+  for secrets (gitleaks).
 
 ## Writing an agent
 

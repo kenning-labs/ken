@@ -26,7 +26,7 @@ jobs:
         working-directory: engine
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e '.[dev,mcp]'

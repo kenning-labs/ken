@@ -1,11 +1,12 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/header-dark.png">
-  <img alt="ken. One memory for every AI you use. Your world, linked, on your machine. A judge checks every write. You decide the unsure ones." src=".github/assets/header-light.png" width="100%">
+  <img alt="ken. The current state of your life, for every AI you use. Not what was said. What is true now. On your machine. A judge keeps it true." src=".github/assets/header-light.png" width="100%">
 </picture>
 
 <p align="center">
-  Ken is a self-hosted MCP server that keeps one current, linked record of your tasks, people,
-  projects and preferences, shared by every AI app you use. We call that record "your world".
+  Ken is a self-hosted MCP server that keeps the current state of your life: one linked record of
+  your tasks, people, projects and preferences, shared by every AI app you use. Not what was said,
+  but what is true now. We call that record "your world".
   One SQLite file, Python, alpha. It uses a model for its checks: OpenAI, any OpenAI-compatible API,
   a local model, or your Claude Code login.
 </p>

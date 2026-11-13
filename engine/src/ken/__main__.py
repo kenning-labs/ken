@@ -29,6 +29,7 @@ import argparse
 import asyncio
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -323,47 +324,75 @@ def _ask_llm(args) -> dict | None:
     return {"provider": "openai", "api_key": key} | ({"base_url": base_url} if base_url else {})
 
 
-def _claude_entry(claude: str, name: str) -> str | None:
-    """Where Claude Code's MCP server `name` points: its command, or the host of its URL.
-    Never the headers or the URL path (a token can sit in either). None = no such server."""
+def _claude_entry(claude: str, name: str, mcp: str) -> tuple[str, str, str]:
+    """What Claude Code's MCP server `name` is, from `claude mcp get`: (state, label, remove command).
+    state: "absent" | "this" (runs this ken-mcp on this home) | "foreign" (known to be something else)
+    | "unknown" (the call failed, or a URL we cannot match to this engine). The label shows the
+    command or the URL's host only, never the URL's path, user info or headers (tokens live there)."""
     from urllib.parse import urlparse
+    remove = f"claude mcp remove {name}"
     try:
         r = subprocess.run([claude, "mcp", "get", name], capture_output=True, text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError):
-        return None
+        return "unknown", "an unreadable server", remove
     if r.returncode != 0:
-        return None
+        no_such = "no mcp server named" in (r.stdout + r.stderr).lower()
+        return ("absent" if no_such else "unknown"), "an unreadable server", remove
+    fields: dict[str, str] = {}
     for line in r.stdout.splitlines():
-        key, _, val = line.strip().partition(":")
-        if key == "Command":
-            return val.strip()
-        if key == "URL":
-            host = urlparse(val.strip()).netloc
-            return f"Ken Cloud ({host})" if host.endswith("kenninglabs.com") else f"a server at {host}"
-    return "another server"
+        text = line.strip()
+        if text.startswith("To remove this server, run:"):
+            remove = text.partition(":")[2].strip()
+        elif text.startswith("KEN_HOME="):
+            fields["KEN_HOME"] = text.partition("=")[2]
+        else:
+            key, sep, val = text.partition(":")
+            if sep and key in ("Command", "URL"):
+                fields[key] = val.strip()
+    if "URL" in fields:
+        host = urlparse(fields["URL"]).hostname or "?"
+        if host == "kenninglabs.com" or host.endswith(".kenninglabs.com"):
+            return "foreign", f"Ken Cloud ({host})", remove
+        return "unknown", f"a server at {host}", remove   # maybe this engine over HTTP: cannot tell
+    if "Command" in fields:
+        command = fields["Command"]
+        path = shutil.which(command) or command
+        same_file = os.path.realpath(path) == os.path.realpath(mcp)
+        home = os.path.realpath(os.path.expanduser(fields.get("KEN_HOME") or "~/.ken"))
+        same_home = home == os.path.realpath(db.db_path().parent)
+        if same_file and same_home:
+            return "this", command, remove
+        if same_file:
+            return "foreign", f"this ken-mcp on another data folder ({home})", remove
+        return "foreign", command, remove
+    return "unknown", "a server of another kind", remove
 
 
 def _register_claude(args) -> tuple[str | None, str]:
     """Offer `claude mcp add ken`. Never fails the init: on any problem, print the command.
-    Returns (the name Claude Code reaches THIS engine under, or None; the command to connect by hand)."""
+    Returns (the name Claude Code reaches THIS engine under, or None; the command to connect by hand).
+    Never removes or replaces an existing server."""
     claude = shutil.which("claude")
     sibling = Path(sys.executable).with_name("ken-mcp")            # same venv as this `ken`
-    mcp = str(sibling) if sibling.exists() else (shutil.which("ken-mcp") or "ken-mcp")
+    found = str(sibling) if sibling.exists() else shutil.which("ken-mcp")
+    mcp = found or "ken-mcp"
 
-    def add_cmd(name: str) -> list[str]:
-        cmd = [claude or "claude", "mcp", "add", "--scope", "user", name]
+    def add_args(name: str) -> list[str]:
+        cmd = ["mcp", "add", "--scope", "user", name]
         if os.environ.get("KEN_HOME"):                               # the MCP must read the same home
             cmd += ["-e", f"KEN_HOME={db.db_path().parent}"]
         return cmd + ["--", mcp]
 
-    by_hand = " ".join(["claude", *add_cmd("ken")[1:]])
+    def hand(name: str) -> str:
+        return shlex.join(["claude", *add_args(name)])
+
+    by_hand = hand("ken")
     if args.no_claude or not claude:
         if args.add_to_claude:
             print("ken: `claude` is not on PATH — skipped the Claude Code step")
         return None, by_hand
-    if not (sibling.exists() or shutil.which("ken-mcp")):
-        print("ken: ken-mcp not found — install with `pip install 'ken-engine[mcp]'`, then run "
-              "`claude mcp add --scope user ken -- ken-mcp`")
+    if not found:
+        print(f"ken: ken-mcp not found — install with `pip install 'ken-engine[mcp]'`, then run: {by_hand}")
         return None, by_hand
     if not args.add_to_claude:
         if not sys.stdin.isatty():
@@ -378,33 +407,44 @@ def _register_claude(args) -> tuple[str | None, str]:
             print(f"ken: skipped. Later, run: {by_hand}")
             return None, by_hand
 
+    remove_ken = ""
     for name in ("ken", "ken-local"):
+        by_hand = hand(name)
         try:
-            r = subprocess.run(add_cmd(name), capture_output=True, text=True, timeout=60, check=False)
+            r = subprocess.run([claude, *add_args(name)], capture_output=True, text=True,
+                               timeout=60, check=False)
         except (OSError, subprocess.SubprocessError) as exc:
             print(f"ken: `claude mcp add` failed ({exc.__class__.__name__}). Run by hand: {by_hand}")
             return None, by_hand
         out = (r.stdout + r.stderr).strip()
         if r.returncode == 0:
             print(f"ken: added to Claude Code as the `{name}` MCP server")
-            if name != "ken":
-                print(f"     Claude Code now has two Ken servers. To use only this one, turn off `ken` "
-                      f"(and any claude.ai Ken connector) in /mcp, or remove it: claude mcp remove ken -s user")
+            if remove_ken:
+                print("     Claude Code now has two Ken servers. To use only this one, turn off `ken` "
+                      f"(and any claude.ai Ken connector) in /mcp, or remove it: {remove_ken}")
             return name, by_hand
         if "already exists" not in out.lower():
             print(f"ken: `claude mcp add` failed: {out.splitlines()[-1] if out else r.returncode}\n"
                   f"     Run by hand: {by_hand}")
             return None, by_hand
-        target = _claude_entry(claude, name) or "another server"
-        if mcp in target or (name == "ken-local" and "ken-mcp" in target):
+        state, label, remove = _claude_entry(claude, name, mcp)
+        if state == "this":
             print(f"ken: Claude Code already reaches this engine as `{name}`")
             return name, by_hand
-        if name == "ken":       # someone else's `ken`: never replace it silently
-            print(f"ken: Claude Code's `ken` is {target}, not this engine — left unchanged. "
-                  "Adding this engine as `ken-local`.")
-    print(f"ken: Claude Code's `ken-local` is {target}, not this engine — left unchanged.\n"
-          f"     Run by hand: {' '.join(['claude', *add_cmd('ken-self')[1:]])}")
-    return None, by_hand
+        if state != "foreign":          # unknown (or gone meanwhile): never add a possible duplicate
+            print(f"ken: Claude Code's `{name}` is {label}; ken could not tell whether it is this engine — "
+                  "left unchanged.")
+            if name == "ken":
+                print(f"     If it is not, add this engine as `ken-local`: {hand('ken-local')}")
+                return None, hand("ken-local")
+            return None, by_hand
+        if name == "ken":
+            print(f"ken: Claude Code's `ken` is {label}, not this engine — left unchanged. "
+                  "Using `ken-local` for this engine.")
+            remove_ken = remove
+    print(f"ken: Claude Code's `ken-local` is {label}, not this engine — left unchanged.\n"
+          f"     To connect this engine, free that name ({remove}), then run: {by_hand}")
+    return None, f"{remove} && {by_hand}"
 
 
 def _offer_service(args) -> bool:

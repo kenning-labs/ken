@@ -435,7 +435,8 @@ def _claude_entry(claude: str, name: str, mcp: str) -> tuple[str, str, str]:
     from urllib.parse import urlparse
     remove = f"claude mcp remove {name}"
     try:
-        r = subprocess.run([claude, "mcp", "get", name], capture_output=True, text=True, timeout=60, check=False)
+        r = subprocess.run([claude, "mcp", "get", name], capture_output=True, text=True, timeout=60,
+                           check=False, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return "unknown", "an unreadable server", remove
     if r.returncode != 0:
@@ -519,7 +520,7 @@ def _register_claude(args) -> tuple[str | None, str]:
         by_hand = hand(name)
         try:
             r = subprocess.run([claude, *add_args(name)], capture_output=True, text=True,
-                               timeout=60, check=False)
+                               timeout=60, check=False, stdin=subprocess.DEVNULL)
         except (OSError, subprocess.SubprocessError) as exc:
             _say("no", f"`claude mcp add` failed ({exc.__class__.__name__}). Run by hand: {by_hand}")
             return None, by_hand

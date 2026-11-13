@@ -277,7 +277,8 @@ _EXAMPLE_URL = "https://github.com/kenning-labs/ken/blob/main/engine/config.exam
 _CONFIG_HEADER = f"# Ken config. More options (tiers, http, push, user): {_EXAMPLE_URL}\n"
 
 
-# ---- the `ken init` screens: plain ANSI, no dependency; no color when piped or NO_COLOR is set
+# ---- the `ken init` screens: plain ANSI, no dependency. Color and the spinner only on a real
+# terminal (not piped, not NO_COLOR, not TERM=dumb); otherwise the same lines in plain text.
 
 def _color() -> bool:
     return sys.stdout.isatty() and not os.environ.get("NO_COLOR") and os.environ.get("TERM") != "dumb"
@@ -289,17 +290,65 @@ def _c(code: str, text: str) -> str:
 
 _CLAY = "38;2;184;90;60"          # the brand clay, #B85A3C
 _MARKS = {"ok": ("32", "✓"), "no": ("31", "✗"), "note": ("33", "!"), "skip": ("2", "·")}
+_WORDMARK = ("██╗  ██╗███████╗███╗   ██╗", "██║ ██╔╝██╔════╝████╗  ██║", "█████╔╝ █████╗  ██╔██╗ ██║",
+             "██╔═██╗ ██╔══╝  ██║╚██╗██║", "██║  ██╗███████╗██║ ╚████║", "╚═╝  ╚═╝╚══════╝╚═╝  ╚═══╝")
+
+
+class _Step:
+    """One live step: results collect while it works; `end` prints one line plus any notes."""
+    current: "_Step | None" = None
+
+    def __init__(self, title: str):
+        import threading
+        self.title, self.results, self._stop, self._spin = title, [], threading.Event(), None
+        _Step.current = self
+
+    def work(self) -> None:
+        """Spin while Ken works (never during a question). No-op without color."""
+        import threading
+        import time
+        if not _color() or self._spin:
+            return
+
+        def spin() -> None:
+            frames, i = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", 0
+            while not self._stop.is_set():
+                sys.stdout.write(f"\r  {_c(_CLAY, frames[i % 10])} {_c('1', self.title)} {_c('2', 'working…')}\033[K")
+                sys.stdout.flush()
+                i += 1
+                time.sleep(0.08)
+        self._spin = threading.Thread(target=spin, daemon=True)
+        self._spin.start()
+
+    def end(self) -> None:
+        if self._spin:
+            self._stop.set()
+            self._spin.join()
+            sys.stdout.write("\r\033[K")
+        _Step.current = None
+        rank = {"no": 0, "ok": 1, "skip": 2, "note": 3}
+        main = min(self.results, key=lambda r: rank[r[0]]) if self.results else ("ok", "")
+        code, mark = _MARKS[main[0]]
+        first, *more = main[1].split("\n")
+        print(f"  {_c(code, mark)} {_c('1', f'{self.title:<12}')} {_c('2', first) if main[0] == 'ok' else first}")
+        for line in more:
+            print(f"      {_c('2', line.strip())}")
+        for kind, text in self.results:
+            if (kind, text) is main or (kind, text) == main:
+                continue
+            code, mark = _MARKS[kind]
+            first, *rest = text.split("\n")
+            print(f"      {_c(code, mark)} {first}" + "".join(f"\n        {line.strip()}" for line in rest))
 
 
 def _say(kind: str, text: str) -> None:
-    """One result line under a step: ✓ done, ✗ failed, ! worth knowing, · skipped."""
+    """A result: ✓ done, ✗ failed, ! worth knowing, · skipped. Inside a step it waits for the step's line."""
+    if _Step.current is not None:
+        _Step.current.results.append((kind, text))
+        return
     code, mark = _MARKS[kind]
     first, *rest = text.split("\n")
-    print(f"    {_c(code, mark)} {first}" + "".join(f"\n      {line.strip()}" for line in rest))
-
-
-def _step(n: int, title: str) -> None:
-    print(f"\n  {_c('2', f'{n}/4')}  {_c('1', title)}")
+    print(f"  {_c(code, mark)} {first}" + "".join(f"\n    {line.strip()}" for line in rest))
 
 
 def _tilde(path) -> str:
@@ -309,8 +358,15 @@ def _tilde(path) -> str:
 
 def _banner() -> None:
     from . import __version__
-    print(f"\n  {_c('1', 'ken')}{_c(_CLAY, '▮')}  the current state of your life, for every AI you use")
-    print(f"  {_c('2', f'v{__version__} · setup')}")
+    print()
+    if sys.stdout.isatty() and shutil.get_terminal_size((80, 24)).columns >= 40:
+        bar = ("   ", "   ", "███", "███", "███", "   ")
+        for row, b in zip(_WORDMARK, bar):
+            print(f"  {_c('1', row)} {_c(_CLAY, b)}")
+        print(f"\n  the current state of your life, for every AI you use  {_c('2', f'· v{__version__}')}\n")
+    else:
+        print(f"  {_c('1', 'ken')}{_c(_CLAY, '▮')}  the current state of your life, for every AI you use"
+              f"  {_c('2', f'· v{__version__}')}\n")
 
 
 def _model_label(llm: dict) -> str:
@@ -345,22 +401,22 @@ def _ask_llm(args) -> dict | None:
         return None
     has_claude = bool(shutil.which("claude"))
     default = "1"
-    print("    Ken uses a model to check what your apps write and to read plain-text notes. Which one?")
-    print("      1) an OpenAI API key (recommended)")
-    print("      2) your Claude Code login (no API key)" + ("" if has_claude else "  [claude not found on PATH]"))
-    print("      3) another OpenAI-compatible API (base URL + key)")
-    print("      4) no model for now: Ken saves what your apps send, but cannot check it or read plain-text notes")
+    print("  Ken uses a model to check what your apps write and to read plain-text notes. Which one?")
+    print("    1) an OpenAI API key (recommended)")
+    print("    2) your Claude Code login (no API key)" + ("" if has_claude else "  [claude not found on PATH]"))
+    print("    3) another OpenAI-compatible API (base URL + key)")
+    print("    4) no model for now: Ken saves what your apps send, but cannot check it or read plain-text notes")
     import getpass
     try:
         choice = ""
         while choice not in ("1", "2", "3", "4"):
-            choice = input(f"    Choose 1-4 [{default}]: ").strip() or default
+            choice = input(f"  Choose 1-4 [{default}]: ").strip() or default
         if choice == "4":
             return {}
         if choice == "2":
             return {"provider": "claude-code"}
-        base_url = input("    Base URL (e.g. https://host/v1): ").strip() if choice == "3" else ""
-        key = getpass.getpass("    API key (hidden): ").strip()
+        base_url = input("  Base URL (e.g. https://host/v1): ").strip() if choice == "3" else ""
+        key = getpass.getpass("  API key (hidden): ").strip()
     except (EOFError, KeyboardInterrupt):
         print()
         return None
@@ -448,7 +504,7 @@ def _register_claude(args) -> tuple[str | None, str]:
             _say("skip", f"not asked (no terminal). To use Ken from Claude Code, run: {by_hand}")
             return None, by_hand
         try:
-            yes = input("    Add Ken to Claude Code (all projects)? [y/N]: ").strip().lower() in ("y", "yes")
+            yes = input("  Add Ken to Claude Code (all projects)? [y/N]: ").strip().lower() in ("y", "yes")
         except (EOFError, KeyboardInterrupt):
             yes = False
             print()
@@ -456,6 +512,8 @@ def _register_claude(args) -> tuple[str | None, str]:
             _say("skip", f"skipped. Later, run: {by_hand}")
             return None, by_hand
 
+    if _Step.current:
+        _Step.current.work()
     remove_ken = ""
     for name in ("ken", "ken-local"):
         by_hand = hand(name)
@@ -508,13 +566,15 @@ def _offer_service(args) -> bool:
             _say("skip", "not asked (no terminal). To run Ken in the background, run: ken service install")
             return False
         try:
-            yes = input("    Run Ken in the background (starts at login)? [Y/n]: ").strip().lower() in ("", "y", "yes")
+            yes = input("  Run Ken in the background (starts at login)? [Y/n]: ").strip().lower() in ("", "y", "yes")
         except (EOFError, KeyboardInterrupt):
             yes = False
             print()
         if not yes:
             _say("skip", "skipped. Later, run: ken service install")
             return False
+    if _Step.current:
+        _Step.current.work()
     said = io.StringIO()
     with contextlib.redirect_stdout(said):
         ok = service.main("install") == 0
@@ -531,7 +591,7 @@ def _cmd_init(args) -> int:
     """`ken init` — one guided first run: the model, home + database, Claude Code, the background."""
     cfg = config.config_path()                                     # creates the 0700 home
     _banner()
-    _step(1, "Model")
+    step = _Step("Model")
     llm = None
     if cfg.exists():
         _say("ok", f"{_tilde(cfg)} already exists — left unchanged")
@@ -540,35 +600,41 @@ def _cmd_init(args) -> int:
         except (OSError, yaml.YAMLError):
             have = {}
     else:
-        llm = _ask_llm(args)
+        try:
+            llm = _ask_llm(args)
+        finally:
+            if llm is None:
+                _Step.current = None
         if llm is None:
             return 2
         have = llm
         _say("ok", _model_label(llm))
-    _step(2, "Your data")
+    step.end()
+    step = _Step("Your data")
+    step.work()
     asyncio.run(db.init_db())                                      # == `ken init-db`
-    _say("ok", f"initialized {_tilde(db.db_path())}")
     if llm is not None:
         config.write_private(cfg, _CONFIG_HEADER + (yaml.safe_dump({"llm": llm}, sort_keys=False) if llm else ""))
-        _say("ok", f"wrote {_tilde(cfg)} (owner-only: only you can read it)")
         if not llm:
             _say("note", f"no model; to add one later, see {_EXAMPLE_URL}")
         elif llm.get("base_url"):     # another host rarely serves the OpenAI default model names
             _say("note", f"set your models under llm.tiers (fast, reasoning); see {_EXAMPLE_URL}")
-    _step(3, "Claude Code")
+    _say("ok", f"initialized {_tilde(db.db_path())}, only you can read it")
+    step.end()
+    step = _Step("Claude Code")
     name, by_hand = _register_claude(args)
-    _step(4, "Background")
+    step.end()
+    step = _Step("Background")
     running = _offer_service(args)
+    step.end()
     _summary(running, have, name, by_hand)
     return 0
 
 
 def _summary(running: bool, llm: dict, name: str | None, by_hand: str) -> None:
-    """The last screen: what is true now, and the one thing to do next."""
+    """The last screen: what is true now, and what to do next."""
     sibling = Path(sys.executable).with_name("ken-mcp")
     mcp = str(sibling) if sibling.exists() else (shutil.which("ken-mcp") or "ken-mcp")
-    rule = _c("2", "─" * 64)
-    ready = running and name
     rows = [("Engine", "live in the background · starts at login" if running else "not running yet"),
             ("Data", f"{_tilde(db.db_path().parent)} (only you can read it)"),
             ("Model", _model_label(llm)),
@@ -580,14 +646,16 @@ def _summary(running: bool, llm: dict, name: str | None, by_hand: str) -> None:
     else:
         steps.append(f"Connect Claude Code: {by_hand}  (other apps: see the README)")
         steps.append('Then, in Claude Code, say: "set up my world".')
-    print(f"\n  {rule}")
-    print("  " + _c("1", "Ken is ready." if ready else "Ken is installed. A step is left."))
-    print()
+    head = (_c("32;1", "✓ Ken is ready.") if running and name
+            else _c("33;1", "! Ken is installed. A step is left."))
+    print(f"\n  {head}\n")
     for key, val in rows:
-        print(f"  {_c('2', f'{key:<7}')} {val}")
-    print("\n  " + _c("1", "Next:") + "".join(f"\n    {i}. {s}" for i, s in enumerate(steps, 1)))
-    print(f"\n  {_c('2', f'Cursor, Codex or any MCP client: add a stdio server that runs {_tilde(mcp)}')}")
-    print(f"  {rule}\n")
+        print(f"    {_c('2', f'{key:<7}')} {val}")
+    if len(steps) == 1:
+        print(f"\n  {_c(_CLAY, '→')} {steps[0]}")
+    else:
+        print("\n  " + _c("1", "Next:") + "".join(f"\n    {i}. {s}" for i, s in enumerate(steps, 1)))
+    print(f"\n  {_c('2', f'Cursor, Codex or any MCP client: add a stdio server that runs {_tilde(mcp)}')}\n")
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -636,6 +636,9 @@ def _summary(running: bool, llm: dict, name: str | None, by_hand: str) -> None:
     """The last screen: what is true now, and what to do next."""
     sibling = Path(sys.executable).with_name("ken-mcp")
     mcp = str(sibling) if sibling.exists() else (shutil.which("ken-mcp") or "ken-mcp")
+    on_path = shutil.which("ken-mcp")
+    if on_path and os.path.realpath(on_path) == os.path.realpath(mcp):
+        mcp = "ken-mcp"                                            # the short name works from any shell
     rows = [("Engine", "live in the background · starts at login" if running else "not running yet"),
             ("Data", f"{_tilde(db.db_path().parent)} (only you can read it)"),
             ("Model", _model_label(llm)),

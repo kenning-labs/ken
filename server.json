@@ -1,0 +1,32 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.kenning-labs/ken",
+  "title": "Ken",
+  "description": "The current state of your life, for every AI you use. A judge checks every write.",
+  "websiteUrl": "https://kenninglabs.com",
+  "repository": {
+    "url": "https://github.com/kenning-labs/ken",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://api.kenninglabs.com/u/{uid}/mcp",
+      "variables": {
+        "uid": {
+          "description": "The part after /u/ in the MCP URL under Settings at app.kenninglabs.com",
+          "isRequired": true
+        }
+      },
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer, then 'Your token' from Settings at app.kenninglabs.com",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

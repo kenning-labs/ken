@@ -84,7 +84,23 @@ saves its own guess rather than your words, or when the write comes from an agen
 
 Rather not install anything? See [Ken Cloud](#ken-cloud).
 
-**Let your agent do it.** Paste this into Claude Code, Codex or another coding agent:
+```bash
+brew install uv     # skip if you have uv. Linux: curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install 'ken-engine[mcp] @ git+https://github.com/kenning-labs/ken#subdirectory=engine'
+ken init
+```
+
+`ken init` asks three things: which model Ken uses, whether to add Ken to Claude Code, and whether
+to run it in the background. Then it tells you what is ready.
+
+<p align="center">
+<img alt="ken init in a terminal: the KEN wordmark, a model choice (2, your Claude Code login), then four steps marked done: Model, Your data, Claude Code (added as ken), Background (runs now and at every login). Last: Ken is ready, and: in Claude Code, say set up my world." src=".github/assets/ken-init.gif" width="720">
+</p>
+
+<details>
+<summary><b>Let your agent install it</b></summary>
+
+Paste this into Claude Code, Codex or another coding agent:
 
 ```text
 Install Ken, a local MCP server, from https://github.com/kenning-labs/ken (README, "Get started"):
@@ -100,57 +116,28 @@ Install Ken, a local MCP server, from https://github.com/kenning-labs/ken (READM
 
 If your agent may not change Claude Code's own settings, `ken init` prints the `claude mcp add`
 command for you to run.
+</details>
 
-Or do it by hand:
+<details>
+<summary><b>More about the install:</b> the model, other setups, running Ken by hand</summary>
 
-**0. Get uv** (skip this if `uv --version` works)
+- **uv** installs Ken and fetches Python 3.11 or newer if you don't have it. After installing uv,
+  open a new terminal. After the first PyPI release, the install becomes `uv tool install 'ken-engine[mcp]'`.
+- **The model** checks what your apps write and reads plain-text notes: an OpenAI key, your Claude Code
+  login, another OpenAI-compatible API, or none for now. Without a terminal, pass it as a flag:
+  `ken init --claude-code`, `--api-key KEY` (with `--base-url URL`), or `--no-model`.
+- **Your data** is in `~/.ken`, private to you.
+- **Claude Code:** if it already has a server named `ken` (for example Ken Cloud), `ken init` keeps it
+  and adds this engine as `ken-local`; turn the other one off in `/mcp`.
+- **The background service** starts at login (launchd on macOS, a systemd user service on Linux).
+  Without it, run `ken` in a terminal and keep it open. Later: `ken service status`,
+  `ken service uninstall`, or `ken service install`. `ken status` shows whether the engine is live;
+  `ken --version` shows the version.
+- Apps talk to the engine through `ken-mcp`. Writes wait for the engine: with the engine stopped, a
+  write returns outcome `queued` and applies when it starts, so do not send it again.
+</details>
 
-uv installs Ken and fetches Python 3.11 or newer if you don't have it.
-
-```bash
-brew install uv                                   # macOS with Homebrew
-curl -LsSf https://astral.sh/uv/install.sh | sh   # or: macOS and Linux, no Homebrew
-```
-
-Open a new terminal afterwards.
-
-**1. Install**
-
-```bash
-uv tool install 'ken-engine[mcp] @ git+https://github.com/kenning-labs/ken#subdirectory=engine'
-```
-
-After the first PyPI release this becomes `uv tool install 'ken-engine[mcp]'` (or `pipx install`).
-
-**2. Set up**
-
-```bash
-ken init
-```
-
-It creates `~/.ken`, private to you, asks which model to use (an OpenAI key, your Claude Code login,
-another OpenAI-compatible API, or no model for now: `ken init --no-model`), offers to add Ken to
-Claude Code, and offers to run the engine in the background (it starts at login: launchd on macOS,
-a systemd user service on Linux). If Claude Code already has a server named `ken` (for example
-Ken Cloud), `ken init` keeps it and adds this engine as `ken-local`; turn the other one off in `/mcp`.
-
-**3. Start**
-
-Said yes to the background service? The engine already runs. Otherwise, run it in a terminal and keep
-it open:
-
-```bash
-ken
-```
-
-Later: `ken service status`, `ken service uninstall`, or `ken service install` to switch to the background.
-`ken status` shows whether the engine is live; `ken --version` shows the version.
-
-Apps talk to the engine through `ken-mcp`, which `ken init` can add to Claude Code. Writes wait for
-the engine: with the engine stopped, a write returns outcome `queued` and applies when it starts, so
-do not send it again.
-
-In Claude (Code or Desktop), say **"set up my world"**. Claude reads what it can reach (connected mail,
+Then, in Claude (Code or Desktop), say **"set up my world"**. Claude reads what it can reach (connected mail,
 calendar, files) and proposes your people, projects and documents in batches. Ken saves nothing
 until you say yes.
 

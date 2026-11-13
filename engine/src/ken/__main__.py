@@ -277,6 +277,109 @@ _EXAMPLE_URL = "https://github.com/kenning-labs/ken/blob/main/engine/config.exam
 _CONFIG_HEADER = f"# Ken config. More options (tiers, http, push, user): {_EXAMPLE_URL}\n"
 
 
+# ---- the `ken init` screens: plain ANSI, no dependency. Color and the spinner only on a real
+# terminal (not piped, not NO_COLOR, not TERM=dumb); otherwise the same lines in plain text.
+
+def _color() -> bool:
+    return sys.stdout.isatty() and not os.environ.get("NO_COLOR") and os.environ.get("TERM") != "dumb"
+
+
+def _c(code: str, text: str) -> str:
+    return f"\033[{code}m{text}\033[0m" if _color() else text
+
+
+_CLAY = "38;2;184;90;60"          # the brand clay, #B85A3C
+_MARKS = {"ok": ("32", "✓"), "no": ("31", "✗"), "note": ("33", "!"), "skip": ("2", "·")}
+_WORDMARK = ("██╗  ██╗███████╗███╗   ██╗", "██║ ██╔╝██╔════╝████╗  ██║", "█████╔╝ █████╗  ██╔██╗ ██║",
+             "██╔═██╗ ██╔══╝  ██║╚██╗██║", "██║  ██╗███████╗██║ ╚████║", "╚═╝  ╚═╝╚══════╝╚═╝  ╚═══╝")
+
+
+class _Step:
+    """One live step: results collect while it works; `end` prints one line plus any notes."""
+    current: _Step | None = None
+
+    def __init__(self, title: str):
+        import threading
+        self.title, self.results, self._stop, self._spin = title, [], threading.Event(), None
+        _Step.current = self
+
+    def work(self) -> None:
+        """Spin while Ken works (never during a question). No-op without color."""
+        import threading
+        import time
+        if not _color() or self._spin:
+            return
+
+        def spin() -> None:
+            frames, i = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", 0
+            while not self._stop.is_set():
+                sys.stdout.write(f"\r  {_c(_CLAY, frames[i % 10])} {_c('1', self.title)} {_c('2', 'working…')}\033[K")
+                sys.stdout.flush()
+                i += 1
+                time.sleep(0.08)
+        self._spin = threading.Thread(target=spin, daemon=True)
+        self._spin.start()
+
+    def end(self) -> None:
+        if self._spin:
+            self._stop.set()
+            self._spin.join()
+            sys.stdout.write("\r\033[K")
+        _Step.current = None
+        rank = {"no": 0, "ok": 1, "skip": 2, "note": 3}
+        main = min(self.results, key=lambda r: rank[r[0]]) if self.results else ("ok", "")
+        code, mark = _MARKS[main[0]]
+        first, *more = main[1].split("\n")
+        print(f"  {_c(code, mark)} {_c('1', f'{self.title:<12}')} {_c('2', first) if main[0] == 'ok' else first}")
+        for line in more:
+            print(f"      {_c('2', line.strip())}")
+        for kind, text in self.results:
+            if (kind, text) is main or (kind, text) == main:
+                continue
+            code, mark = _MARKS[kind]
+            first, *rest = text.split("\n")
+            print(f"      {_c(code, mark)} {first}" + "".join(f"\n        {line.strip()}" for line in rest))
+
+
+def _say(kind: str, text: str) -> None:
+    """A result: ✓ done, ✗ failed, ! worth knowing, · skipped. Inside a step it waits for the step's line."""
+    if _Step.current is not None:
+        _Step.current.results.append((kind, text))
+        return
+    code, mark = _MARKS[kind]
+    first, *rest = text.split("\n")
+    print(f"  {_c(code, mark)} {first}" + "".join(f"\n    {line.strip()}" for line in rest))
+
+
+def _tilde(path) -> str:
+    p, home = str(path), str(Path.home())
+    return "~" + p[len(home):] if p == home or p.startswith(home + os.sep) else p
+
+
+def _banner() -> None:
+    from . import __version__
+    print()
+    if sys.stdout.isatty() and shutil.get_terminal_size((80, 24)).columns >= 40:
+        bar = ("   ", "   ", "███", "███", "███", "   ")
+        for row, b in zip(_WORDMARK, bar):
+            print(f"  {_c('1', row)} {_c(_CLAY, b)}")
+        print(f"\n  the current state of your life, for every AI you use  {_c('2', f'· v{__version__}')}\n")
+    else:
+        print(f"  {_c('1', 'ken')}{_c(_CLAY, '▮')}  the current state of your life, for every AI you use"
+              f"  {_c('2', f'· v{__version__}')}\n")
+
+
+def _model_label(llm: dict) -> str:
+    from urllib.parse import urlparse
+    if not llm:
+        return "none yet: Ken saves what apps send, but cannot check it"
+    if llm.get("provider") == "claude-code":
+        return "your Claude Code login"
+    if llm.get("base_url"):
+        return f"an OpenAI-compatible API ({urlparse(llm['base_url']).hostname or llm['base_url']})"
+    return "an OpenAI API key"
+
+
 def _ask_llm(args) -> dict | None:
     """The llm section for a new config: from the flags, else ONE question on a TTY.
     {} = no model for now. None = no answer possible (not a TTY and no flag), no key given,
@@ -298,22 +401,22 @@ def _ask_llm(args) -> dict | None:
         return None
     has_claude = bool(shutil.which("claude"))
     default = "1"
-    print("Ken uses a model to check what your apps write and to read plain-text notes. Which one?")
-    print("  1) an OpenAI API key (recommended)")
-    print("  2) your Claude Code login (no API key)" + ("" if has_claude else "  [claude not found on PATH]"))
-    print("  3) another OpenAI-compatible API (base URL + key)")
-    print("  4) no model for now: Ken saves what your apps send, but cannot check it or read plain-text notes")
+    print("  Ken uses a model to check what your apps write and to read plain-text notes. Which one?")
+    print("    1) an OpenAI API key (recommended)")
+    print("    2) your Claude Code login (no API key)" + ("" if has_claude else "  [claude not found on PATH]"))
+    print("    3) another OpenAI-compatible API (base URL + key)")
+    print("    4) no model for now: Ken saves what your apps send, but cannot check it or read plain-text notes")
     import getpass
     try:
         choice = ""
         while choice not in ("1", "2", "3", "4"):
-            choice = input(f"Choose 1-4 [{default}]: ").strip() or default
+            choice = input(f"  Choose 1-4 [{default}]: ").strip() or default
         if choice == "4":
             return {}
         if choice == "2":
             return {"provider": "claude-code"}
-        base_url = input("Base URL (e.g. https://host/v1): ").strip() if choice == "3" else ""
-        key = getpass.getpass("API key (hidden): ").strip()
+        base_url = input("  Base URL (e.g. https://host/v1): ").strip() if choice == "3" else ""
+        key = getpass.getpass("  API key (hidden): ").strip()
     except (EOFError, KeyboardInterrupt):
         print()
         return None
@@ -332,7 +435,8 @@ def _claude_entry(claude: str, name: str, mcp: str) -> tuple[str, str, str]:
     from urllib.parse import urlparse
     remove = f"claude mcp remove {name}"
     try:
-        r = subprocess.run([claude, "mcp", "get", name], capture_output=True, text=True, timeout=60, check=False)
+        r = subprocess.run([claude, "mcp", "get", name], capture_output=True, text=True, timeout=60,
+                           check=False, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return "unknown", "an unreadable server", remove
     if r.returncode != 0:
@@ -387,112 +491,175 @@ def _register_claude(args) -> tuple[str | None, str]:
         return shlex.join(["claude", *add_args(name)])
 
     by_hand = hand("ken")
-    if args.no_claude or not claude:
-        if args.add_to_claude:
-            print("ken: `claude` is not on PATH — skipped the Claude Code step")
+    if args.no_claude:
+        _say("skip", "skipped")
+        return None, by_hand
+    if not claude:
+        _say("skip", "Claude Code not found (`claude` is not on PATH)")
         return None, by_hand
     if not found:
-        print(f"ken: ken-mcp not found — install with `pip install 'ken-engine[mcp]'`, then run: {by_hand}")
+        _say("no", f"ken-mcp not found — install with `pip install 'ken-engine[mcp]'`, then run: {by_hand}")
         return None, by_hand
     if not args.add_to_claude:
         if not sys.stdin.isatty():
-            print(f"ken: to use Ken from Claude Code, run: {by_hand}")
+            _say("skip", f"not asked (no terminal). To use Ken from Claude Code, run: {by_hand}")
             return None, by_hand
         try:
-            yes = input("Add Ken to Claude Code (all projects)? [y/N]: ").strip().lower() in ("y", "yes")
+            yes = input("  Add Ken to Claude Code (all projects)? [y/N]: ").strip().lower() in ("y", "yes")
         except (EOFError, KeyboardInterrupt):
             yes = False
             print()
         if not yes:
-            print(f"ken: skipped. Later, run: {by_hand}")
+            _say("skip", f"skipped. Later, run: {by_hand}")
             return None, by_hand
 
+    if _Step.current:
+        _Step.current.work()
     remove_ken = ""
     for name in ("ken", "ken-local"):
         by_hand = hand(name)
         try:
             r = subprocess.run([claude, *add_args(name)], capture_output=True, text=True,
-                               timeout=60, check=False)
+                               timeout=60, check=False, stdin=subprocess.DEVNULL)
         except (OSError, subprocess.SubprocessError) as exc:
-            print(f"ken: `claude mcp add` failed ({exc.__class__.__name__}). Run by hand: {by_hand}")
+            _say("no", f"`claude mcp add` failed ({exc.__class__.__name__}). Run by hand: {by_hand}")
             return None, by_hand
         out = (r.stdout + r.stderr).strip()
         if r.returncode == 0:
-            print(f"ken: added to Claude Code as the `{name}` MCP server")
+            _say("ok", f"added to Claude Code as the `{name}` MCP server")
             if remove_ken:
-                print("     Claude Code now has two Ken servers. To use only this one, turn off `ken` "
-                      f"(and any claude.ai Ken connector) in /mcp, or remove it: {remove_ken}")
+                _say("note", "Claude Code now has two Ken servers. To use only this one, turn off `ken`\n"
+                     f"(and any claude.ai Ken connector) in /mcp, or remove it: {remove_ken}")
             return name, by_hand
         if "already exists" not in out.lower():
-            print(f"ken: `claude mcp add` failed: {out.splitlines()[-1] if out else r.returncode}\n"
-                  f"     Run by hand: {by_hand}")
+            _say("no", f"`claude mcp add` failed: {out.splitlines()[-1] if out else r.returncode}\n"
+                 f"Run by hand: {by_hand}")
             return None, by_hand
         state, label, remove = _claude_entry(claude, name, mcp)
         if state == "this":
-            print(f"ken: Claude Code already reaches this engine as `{name}`")
+            _say("ok", f"Claude Code already reaches this engine as `{name}`")
             return name, by_hand
         if state != "foreign":          # unknown (or gone meanwhile): never add a possible duplicate
-            print(f"ken: Claude Code's `{name}` is {label}; ken could not tell whether it is this engine — "
-                  "left unchanged.")
+            _say("note", f"Claude Code's `{name}` is {label}; ken could not tell whether it is this engine —\n"
+                 "left unchanged.")
             if name == "ken":
-                print(f"     If it is not, add this engine as `ken-local`: {hand('ken-local')}")
+                _say("note", f"If it is not, add this engine as `ken-local`: {hand('ken-local')}")
                 return None, hand("ken-local")
             return None, by_hand
         if name == "ken":
-            print(f"ken: Claude Code's `ken` is {label}, not this engine — left unchanged. "
-                  "Using `ken-local` for this engine.")
+            _say("note", f"Claude Code's `ken` is {label}, not this engine — left unchanged.\n"
+                 "Using `ken-local` for this engine.")
             remove_ken = remove
-    print(f"ken: Claude Code's `ken-local` is {label}, not this engine — left unchanged.\n"
-          f"     To connect this engine, free that name ({remove}), then run: {by_hand}")
+    _say("no", f"Claude Code's `ken-local` is {label}, not this engine — left unchanged.\n"
+         f"To connect this engine, free that name ({remove}), then run: {by_hand}")
     return None, f"{remove} && {by_hand}"
 
 
 def _offer_service(args) -> bool:
     """Offer `ken service install`. True = the engine now runs in the background."""
+    import contextlib
+    import io
     if args.no_service:
+        _say("skip", "skipped")
         return False
     if not args.service:
         if not sys.stdin.isatty():
-            print("ken: to run Ken in the background, run: ken service install")
+            _say("skip", "not asked (no terminal). To run Ken in the background, run: ken service install")
             return False
         try:
-            yes = input("Run Ken in the background (starts at login)? [Y/n]: ").strip().lower() in ("", "y", "yes")
+            yes = input("  Run Ken in the background (starts at login)? [Y/n]: ").strip().lower() in ("", "y", "yes")
         except (EOFError, KeyboardInterrupt):
             yes = False
             print()
         if not yes:
-            print("ken: skipped. Later, run: ken service install")
+            _say("skip", "skipped. Later, run: ken service install")
             return False
-    return service.main("install") == 0
+    if _Step.current:
+        _Step.current.work()
+    said = io.StringIO()
+    with contextlib.redirect_stdout(said):
+        ok = service.main("install") == 0
+    if not ok:
+        print(said.getvalue(), end="")
+        _say("no", "could not install the background service (see above). Start the engine by hand: ken")
+        return False
+    log = next((ln.split("log:", 1)[1].strip() for ln in said.getvalue().splitlines() if "log:" in ln), "")
+    _say("ok", "runs now and at every login" + (f"\nlog: {_tilde(log)}" if log else ""))
+    return True
 
 
 def _cmd_init(args) -> int:
-    """`ken init` — one guided first run: home + database, the model, Claude Code."""
+    """`ken init` — one guided first run: the model, home + database, Claude Code, the background."""
     cfg = config.config_path()                                     # creates the 0700 home
+    _banner()
+    step = _Step("Model")
     llm = None
     if cfg.exists():
-        print(f"ken: {cfg} already exists — left unchanged")
+        _say("ok", f"{_tilde(cfg)} already exists — left unchanged")
+        try:
+            have = (yaml.safe_load(cfg.read_text()) or {}).get("llm") or {}
+        except (OSError, yaml.YAMLError):
+            have = {}
     else:
-        llm = _ask_llm(args)
+        try:
+            llm = _ask_llm(args)
+        finally:
+            if llm is None:
+                _Step.current = None
         if llm is None:
             return 2
+        have = llm
+        _say("ok", _model_label(llm))
+    step.end()
+    step = _Step("Your data")
+    step.work()
     asyncio.run(db.init_db())                                      # == `ken init-db`
-    print(f"initialized {db.db_path()}")
     if llm is not None:
         config.write_private(cfg, _CONFIG_HEADER + (yaml.safe_dump({"llm": llm}, sort_keys=False) if llm else ""))
-        print(f"ken: wrote {cfg} (owner-only)" + ("" if llm else f" — no model; to add one later, see {_EXAMPLE_URL}"))
-        if llm.get("base_url"):     # another host rarely serves the OpenAI default model names
-            print(f"ken: set your models under llm.tiers (fast, reasoning); see {_EXAMPLE_URL}")
+        if not llm:
+            _say("note", f"no model; to add one later, see {_EXAMPLE_URL}")
+        elif llm.get("base_url"):     # another host rarely serves the OpenAI default model names
+            _say("note", f"set your models under llm.tiers (fast, reasoning); see {_EXAMPLE_URL}")
+    _say("ok", f"initialized {_tilde(db.db_path())}, only you can read it")
+    step.end()
+    step = _Step("Claude Code")
     name, by_hand = _register_claude(args)
-    steps = [] if _offer_service(args) else ["Start the engine: `ken` (keep it running)."]
+    step.end()
+    step = _Step("Background")
+    running = _offer_service(args)
+    step.end()
+    _summary(running, have, name, by_hand)
+    return 0
+
+
+def _summary(running: bool, llm: dict, name: str | None, by_hand: str) -> None:
+    """The last screen: what is true now, and what to do next."""
+    sibling = Path(sys.executable).with_name("ken-mcp")
+    mcp = str(sibling) if sibling.exists() else (shutil.which("ken-mcp") or "ken-mcp")
+    on_path = shutil.which("ken-mcp")
+    if on_path and os.path.realpath(on_path) == os.path.realpath(mcp):
+        mcp = "ken-mcp"                                            # the short name works from any shell
+    rows = [("Engine", "live in the background · starts at login" if running else "not running yet"),
+            ("Data", f"{_tilde(db.db_path().parent)} (only you can read it)"),
+            ("Model", _model_label(llm)),
+            ("Apps", f"Claude Code → `{name}`" if name else "not connected yet")]
+    steps = [] if running else ["Start the engine: `ken` (keep it running)."]
     if name:
         steps.append('In Claude Code, say: "set up my world".'
                      + ("" if name == "ken" else f" (There Ken is the `{name}` server.)"))
     else:
         steps.append(f"Connect Claude Code: {by_hand}  (other apps: see the README)")
         steps.append('Then, in Claude Code, say: "set up my world".')
-    print("\nNext:" + "".join(f"\n  {i}. {s}" for i, s in enumerate(steps, 1)))
-    return 0
+    head = (_c("32;1", "✓ Ken is ready.") if running and name
+            else _c("33;1", "! Ken is installed. A step is left."))
+    print(f"\n  {head}\n")
+    for key, val in rows:
+        print(f"    {_c('2', f'{key:<7}')} {val}")
+    if len(steps) == 1:
+        print(f"\n  {_c(_CLAY, '→')} {steps[0]}")
+    else:
+        print("\n  " + _c("1", "Next:") + "".join(f"\n    {i}. {s}" for i, s in enumerate(steps, 1)))
+    print(f"\n  {_c('2', f'Cursor, Codex or any MCP client: add a stdio server that runs {_tilde(mcp)}')}\n")
 
 
 def build_parser() -> argparse.ArgumentParser:

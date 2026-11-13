@@ -296,7 +296,7 @@ _WORDMARK = ("██╗  ██╗███████╗███╗   ██�
 
 class _Step:
     """One live step: results collect while it works; `end` prints one line plus any notes."""
-    current: "_Step | None" = None
+    current: _Step | None = None
 
     def __init__(self, title: str):
         import threading

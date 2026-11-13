@@ -84,7 +84,35 @@ saves its own guess rather than your words, or when the write comes from an agen
 
 Rather not install anything? See [Ken Cloud](#ken-cloud).
 
-You need [uv](https://docs.astral.sh/uv/) (it fetches Python 3.11 or newer if you don't have it).
+**Let your agent do it.** Paste this into Claude Code, Codex or another coding agent:
+
+```text
+Install Ken, a local MCP server, from https://github.com/kenning-labs/ken (README, "Get started"):
+1. If `uv --version` fails, install uv: `brew install uv` on macOS with Homebrew, otherwise
+   `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+2. uv tool install 'ken-engine[mcp] @ git+https://github.com/kenning-labs/ken#subdirectory=engine'
+3. Ask me which model Ken should use: my Claude Code login, or an OpenAI API key (never print a key).
+   Then run `ken init --claude-code --add-to-claude --service`, or `ken init --api-key <key>
+   --add-to-claude --service`.
+4. Run `ken status` and `claude mcp list`. Tell me whether the engine is live and which server name
+   reaches it, then what to say to start and how to undo the install.
+```
+
+If your agent may not change Claude Code's own settings, `ken init` prints the `claude mcp add`
+command for you to run.
+
+Or do it by hand:
+
+**0. Get uv** (skip this if `uv --version` works)
+
+uv installs Ken and fetches Python 3.11 or newer if you don't have it.
+
+```bash
+brew install uv                                   # macOS with Homebrew
+curl -LsSf https://astral.sh/uv/install.sh | sh   # or: macOS and Linux, no Homebrew
+```
+
+Open a new terminal afterwards.
 
 **1. Install**
 
@@ -103,7 +131,8 @@ ken init
 It creates `~/.ken`, private to you, asks which model to use (an OpenAI key, your Claude Code login,
 another OpenAI-compatible API, or no model for now: `ken init --no-model`), offers to add Ken to
 Claude Code, and offers to run the engine in the background (it starts at login: launchd on macOS,
-a systemd user service on Linux).
+a systemd user service on Linux). If Claude Code already has a server named `ken` (for example
+Ken Cloud), `ken init` keeps it and adds this engine as `ken-local`; turn the other one off in `/mcp`.
 
 **3. Start**
 
@@ -115,6 +144,7 @@ ken
 ```
 
 Later: `ken service status`, `ken service uninstall`, or `ken service install` to switch to the background.
+`ken status` shows whether the engine is live; `ken --version` shows the version.
 
 Apps talk to the engine through `ken-mcp`, which `ken init` can add to Claude Code. Writes wait for
 the engine: with the engine stopped, a write returns outcome `queued` and applies when it starts, so

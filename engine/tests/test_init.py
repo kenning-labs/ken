@@ -84,19 +84,68 @@ def _fake_venv(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "executable", str(bindir / "python"))
 
 
-def test_add_to_claude_runs_mcp_add_and_tolerates_already_exists(home, tmp_path, monkeypatch, capsys):
+def _fake_claude(monkeypatch, servers):
+    """A fake `claude mcp add/get` over a dict name -> `claude mcp get` body. Returns the calls."""
     calls = []
 
     def fake_run(cmd, **k):
         calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, 1, "", "MCP server ken already exists in user config")
+        verb, name = cmd[2], cmd[5] if cmd[2] == "add" else cmd[3]
+        if verb == "add":
+            if name in servers:
+                return subprocess.CompletedProcess(cmd, 1, "", f"MCP server {name} already exists in user config")
+            servers[name] = f"  Command: {cmd[-1]}"
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if name in servers:
+            return subprocess.CompletedProcess(cmd, 0, f"{name}:\n{servers[name]}\n", "")
+        return subprocess.CompletedProcess(cmd, 1, "", f'No MCP server named "{name}".')
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    return calls
+
+
+def test_add_to_claude_runs_mcp_add(home, tmp_path, monkeypatch, capsys):
+    calls = _fake_claude(monkeypatch, {})
     _fake_venv(tmp_path, monkeypatch)
     assert _init(monkeypatch, "--claude-code", "--add-to-claude", claude="/bin/claude") == 0
     cmd = calls[0]
     assert cmd[:6] == ["/bin/claude", "mcp", "add", "--scope", "user", "ken"]
     assert f"KEN_HOME={home}" in cmd and cmd[-1].endswith("ken-mcp")
-    assert "already has" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "as the `ken` MCP server" in out and "set up my world" in out
+
+
+def test_a_cloud_ken_is_kept_and_this_engine_becomes_ken_local(home, tmp_path, monkeypatch, capsys):
+    secret = "https://api.kenninglabs.com/u/u-1/t/SECRET/mcp"
+    calls = _fake_claude(monkeypatch, {"ken": f"  Type: http\n  URL: {secret}\n  Headers:\n    Authorization: Bearer TOK"})
+    _fake_venv(tmp_path, monkeypatch)
+    assert _init(monkeypatch, "--claude-code", "--add-to-claude", claude="/bin/claude") == 0
+    assert not any(c[2] == "remove" for c in calls)                  # the cloud entry is never removed
+    out = capsys.readouterr().out
+    assert "Ken Cloud (api.kenninglabs.com), not this engine" in out
+    assert "as the `ken-local` MCP server" in out and "`ken-local` server" in out
+    assert "SECRET" not in out and "TOK" not in out                  # never the URL path or headers
+
+
+def test_an_existing_entry_for_this_engine_counts_as_connected(home, tmp_path, monkeypatch, capsys):
+    _fake_venv(tmp_path, monkeypatch)
+    _fake_claude(monkeypatch, {"ken": f"  Command: {tmp_path / 'bin' / 'ken-mcp'}"})
+    assert _init(monkeypatch, "--claude-code", "--add-to-claude", claude="/bin/claude") == 0
+    out = capsys.readouterr().out
+    assert "already reaches this engine as `ken`" in out and "set up my world" in out
+
+
+def test_not_connected_prints_the_connect_command_in_next(home, monkeypatch, capsys):
+    assert _init(monkeypatch, "--claude-code", "--no-claude", "--no-service", claude="/bin/claude") == 0
+    out = capsys.readouterr().out
+    assert "Connect Claude Code: claude mcp add --scope user ken" in out
+
+
+def test_version(monkeypatch, capsys):
+    from ken import __version__
+    monkeypatch.setattr(sys, "argv", ["ken", "--version"])
+    with pytest.raises(SystemExit):
+        cli.main()
+    assert capsys.readouterr().out.strip() == f"ken-engine {__version__}"
 
 
 def test_failed_registration_does_not_fail_init(home, tmp_path, monkeypatch, capsys):

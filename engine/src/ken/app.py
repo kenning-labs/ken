@@ -74,7 +74,9 @@ def discover_into(eng: Engine) -> Engine:
         kwargs = {}
         if "llm" in params:
             model = resolve_model(llm_cfg, tier=cls.model_tier, agent=cls.__name__)
-            effort = llm_cfg.get("reasoning_effort") if cls.model_tier == "reasoning" else None
+            # a chat-style host may reject reasoning_effort: only the responses API gets it here
+            chat = str(llm_cfg.get("api_style") or "responses") == "chat"
+            effort = llm_cfg.get("reasoning_effort") if cls.model_tier == "reasoning" and not chat else None
             kwargs["llm"] = build_llm(llm_cfg, model=model, effort=effort)
         if "judge" in params:
             kwargs["judge"] = judge

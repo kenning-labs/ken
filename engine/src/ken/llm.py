@@ -104,11 +104,11 @@ class OpenAILLM:
         """Tool loop on /v1/chat/completions. The whole transcript is resent each hop:
         the assistant's tool_calls message, then one `tool` message per call (several calls
         per hop are allowed, each gets its message in order). At the hop cap every call is
-        already answered, so one more tools-off turn forces the final text. Differences from
-        `_respond`: no reasoning effort is sent (compatible hosts reject the field), and the
-        model may call several tools in one hop. A configured effort goes as `reasoning_effort`
-        (DeepSeek takes it; a host that rejects it must leave effort unset), and a thinking
-        model's `reasoning_content` goes back with its tool calls, as DeepSeek requires."""
+        already answered, so one more tools-off turn forces the final text. The model may call
+        several tools in one hop. An effort given to THIS client goes as `reasoning_effort`
+        (DeepSeek takes it; many compatible hosts reject it, so app.py never passes the shared
+        `llm.reasoning_effort` to a chat-style client), and a thinking model's `reasoning_content`
+        goes back with its tool calls, as DeepSeek requires."""
         specs = {t.name: t for t in tools}
         extra = {"reasoning_effort": self._effort} if self._effort else {}
         schemas = [{"type": "function", "function": {"name": t.name, "description": t.description,

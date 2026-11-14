@@ -142,5 +142,50 @@ async def test_an_agent_token_cannot_close_the_inbox(tmp_path):
     assert "forbidden" in json.dumps(out, default=str)
     assert (await dream.items())[0]["status"] == "open"
     out = await srv.call_tool("inbox_close", {"item_id": item["id"], "outcome": "Leave it"})   # the user's token
-    assert '\\"closed\\"' in json.dumps(out, default=str) or "closed" in json.dumps(out, default=str)
+    assert '\\"outcome\\": \\"closed\\"' in json.dumps(out, default=str)
     assert (await dream.items("closed"))[0]["outcome"] == "Leave it"
+
+
+async def test_a_link_alone_and_a_fact_from_an_unrelated_event_are_refused(tmp_path):
+    _, when = await _setup(tmp_path)
+    night = {"tidy": [
+        {"kind": "project", "name": "emigration", "add": "", "link": {"kind": "person", "name": "x", "rel": "member"}},
+        {"kind": "project", "name": "emigration", "add": "Sashko sold the car in October.",   # the 17:45 event is about tickets
+         "source": {"event": when}}]}
+    done = await dream.run_once(llm=FakeLLM(night))
+    assert done["tidy"] == [("emigration: a link with no fact to confirm it was left out "
+                            "(a fact with no event or chat message behind it was left out)")]
+    assert await mcp_server.pending_cards() == []                   # nothing saved, nothing asked
+
+
+async def test_answered_cards_are_known_ids_and_a_repeat_title_is_dropped(tmp_path):
+    task, _ = await _setup(tmp_path)
+    await db.audit("card_outcome", "3fa9c1d2b7e04a5f9c1d2b7e04a5f9c1", json.dumps({"outcome": "rejected"}))
+    first = await dream.run_once(llm=FakeLLM({"asks": [_ask("Re-plan GTM?", "you said no on card 3fa9c1d2")]}))
+    assert first["asks"] == 1 and first["dropped"] == []
+    again = await dream.run_once(llm=FakeLLM({"asks": [_ask("re-plan gtm?", f"task {task.id}")]}))
+    assert again["asks"] == 0 and again["dropped"] == ["re-plan gtm?: raised before"]
+
+
+async def test_no_model_is_audited_and_dreamer_llm_stands_alone(tmp_path, monkeypatch):
+    await _setup(tmp_path)
+    monkeypatch.setattr(dream.config, "section", lambda name: {"provider": "claude-code"} if name == "llm" else {})
+    monkeypatch.setattr(dream, "_cfg", lambda: {"llm": {"api_key": "YOUR_KEY", "api_style": "chat"}})
+    assert await dream.run_once() == {"error": "no model"}           # the placeholder key: no model, no claude -p
+    async with db.get_db() as c:
+        (reason,) = await (await c.execute("SELECT reason FROM audit WHERE kind='dream_error'")).fetchone()
+    assert reason.startswith("no model")
+    monkeypatch.setattr(dream, "_cfg", lambda: {"llm": {"api_key": "sk-x", "api_style": "chat", "model": "deepseek-flash",
+                                                         "base_url": "https://api.deepseek.com", "reasoning_effort": "max"}})
+    llm = dream._llm()
+    assert (type(llm).__name__, llm._model, llm._effort, llm._api_style) == ("OpenAILLM", "deepseek-flash", "max", "chat")
+
+
+def test_a_chat_style_agent_never_gets_the_shared_effort(monkeypatch):
+    from ken import app
+    cfg = {"api_key": "sk-x", "api_style": "chat", "reasoning_effort": "high"}
+    monkeypatch.setattr(app.config, "section", lambda name: cfg if name == "llm" else {})
+    eng = app.build_engine()
+    assert eng.assistant._llm._effort is None                         # was sent before: a 400 on many hosts
+    cfg["api_style"] = "responses"
+    assert app.build_engine().assistant._llm._effort == "high"

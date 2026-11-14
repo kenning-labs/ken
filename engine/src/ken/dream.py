@@ -36,7 +36,7 @@ from .util import new_id, norm, now_ms, slug
 
 CAP = 6                  # asks + looks a night, at most
 EXPIRE_DAYS = 7          # an item nobody answered closes itself after a week
-HISTORY_DAYS = 14        # how far back the prompt shows past items and their outcomes
+HISTORY_DAYS = 90        # how far back the prompt shows past items, and repeats are refused
 HOPS = 16                # tool rounds a night may take
 TOOL_CAP = 60_000        # chars of one tool answer the model sees
 _DAY = 86_400_000
@@ -86,10 +86,10 @@ def _cfg() -> dict:
 
 
 def _llm():
-    """The Dreamer's model: `dreamer.llm` keys over the main `llm` section, so it can run on another
-    host (an OpenAI-compatible one: base_url, api_key, api_style: chat) with its own `model` and
-    `reasoning_effort`. Without `model`, the reasoning tier."""
-    cfg = {**config.section("llm"), **(_cfg().get("llm") or {})}
+    """The Dreamer's model: `dreamer.llm` when set, as a WHOLE llm section of its own (no key of the
+    main one leaks in: a main `provider: claude-code` must not turn a DeepSeek block into claude -p),
+    else the main `llm`. Its `model`, else the reasoning tier; its `reasoning_effort`."""
+    cfg = _cfg().get("llm") or config.section("llm")
     model = cfg.get("model") or resolve_model(cfg, tier="reasoning", agent="Dreamer")
     return build_llm(cfg, model=model, effort=cfg.get("reasoning_effort"))
 
@@ -101,11 +101,8 @@ async def _chat(limit: int = 60) -> str:
         cur = await c.execute("SELECT at, text FROM inbox WHERE conversation_id=? AND kind='message' "
                               "ORDER BY seq DESC LIMIT ?", (bus.MAIN, limit))
         rows = list(reversed(await cur.fetchall()))
+    from .mcp_server import _iso
     return json.dumps({"messages": [{"at": _iso(r["at"]), "text": r["text"]} for r in rows]})
-
-
-def _iso(ms: int | None) -> str | None:
-    return datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%dT%H:%M") if ms else None  # noqa: DTZ006
 
 
 def _tools() -> list[Tool]:
@@ -152,23 +149,38 @@ def _parse(text: str) -> dict:
     return night if isinstance(night, dict) else {}
 
 
-async def _known_ids() -> set[str]:
-    tasks = await store.open_tasks() + await store.tasks_by_status(("done", "dropped"), limit=100_000)
+_ID_SQL = ("SELECT 1 FROM tasks WHERE id LIKE ?1 || '%' OR evidence LIKE '%' || ?1 || '%' "
+           "UNION ALL SELECT 1 FROM pending WHERE ask_id LIKE ?1 || '%' "
+           "UNION ALL SELECT 1 FROM audit WHERE kind='card_outcome' AND ref LIKE ?1 || '%' "
+           "UNION ALL SELECT 1 FROM dream_items WHERE id LIKE ?1 || '%' "
+           "UNION ALL SELECT 1 FROM events WHERE id LIKE ?1 || '%' OR evidence LIKE '%' || ?1 || '%' "
+           "UNION ALL SELECT 1 FROM structured WHERE evidence LIKE '%' || ?1 || '%' LIMIT 1")
+
+
+async def _bad_ids(item) -> list[str]:
+    """Every id-like token the item cites that names nothing Ken holds: a task (open or closed), a
+    card (open or answered), an Inbox item, an event, or an evidence ref on a record."""
+    bad = []
     async with _db.get_db() as c:
-        cards = [r["ask_id"] for r in await (await c.execute("SELECT ask_id FROM pending")).fetchall()]
-    return {t.id for t in tasks} | set(cards)
+        for tok in sorted(set(_ID.findall(json.dumps(item)))):
+            if await (await c.execute(_ID_SQL, (tok,))).fetchone() is None:
+                bad.append(tok)
+    return bad
 
 
-def _bad_ids(item, known: set[str]) -> list[str]:
-    """Every id-like token the item cites that is not the prefix of an id Ken holds."""
-    return sorted(c for c in set(_ID.findall(json.dumps(item))) if not any(k.startswith(c) for k in known))
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"\w+", norm(text)) if len(w) > 3}
 
 
-async def _source_ok(src) -> bool:
-    """A tidy fact's source must exist: an event, or a chat message, at the minute it names."""
+async def _source_ok(src, add: str) -> bool:
+    """A tidy fact's source must exist (an event, expired or not, or a chat message, at the minute
+    it names) and share at least two real words with the fact, so a time picked from an unrelated
+    event does not pass.
+    ponytail: a word overlap, not a judge; a paraphrase with no shared noun is refused (sparse beats false)."""
     if not isinstance(src, dict):
         return False
-    for key in ("event", "chat"):
+    for key, sql in (("event", "SELECT summary AS t FROM events WHERE at>=? AND at<?"),
+                     ("chat", "SELECT text AS t FROM inbox WHERE kind='message' AND at>=? AND at<?")):
         when = str(src.get(key) or "").strip()
         if not when:
             continue
@@ -176,13 +188,9 @@ async def _source_ok(src) -> bool:
             at = int(datetime.fromisoformat(when[:16]).timestamp() * 1000)
         except ValueError:
             return False
-        lo, hi = at, at + 60_000
-        if key == "event":
-            return any(lo <= e.at < hi for e in await store.events_between(lo - 1, hi))
         async with _db.get_db() as c:
-            cur = await c.execute("SELECT 1 FROM inbox WHERE conversation_id=? AND kind='message' AND at>=? AND at<?",
-                                  (bus.MAIN, lo, hi))
-            return await cur.fetchone() is not None
+            rows = await (await c.execute(sql, (at, at + 60_000))).fetchall()
+        return any(len(_words(r["t"] or "") & _words(add)) >= 2 for r in rows)
     return False
 
 
@@ -203,7 +211,7 @@ async def _tidy(group: list[dict], night: str) -> str:
         add = " ".join(str(t.get("add") or "").split())
         if add and norm(add) in norm(" ".join([had.content, *adds])):
             add = ""                                     # the note says it already
-        if add and not await _source_ok(t.get("source")):
+        if add and not await _source_ok(t.get("source"), add):
             notes.append("a fact with no event or chat message behind it was left out")
             add = ""
         if add:
@@ -212,8 +220,11 @@ async def _tidy(group: list[dict], night: str) -> str:
             links.append(t["link"])
         if add or isinstance(t.get("link"), dict):
             why.append(" ".join(str(t.get("why") or "").split())[:300])
-    if not adds and not links:
-        return "nothing to add" + (f" ({'; '.join(notes)})" if notes else "")
+    if not adds:
+        # a link alone would be saved at once (the note is unchanged, so nothing to confirm): while
+        # tidy is proposed, a link only rides on a fact the user confirms on the same card
+        why = "a link with no fact to confirm it was left out" if links else "nothing to add"
+        return why + (f" ({'; '.join(notes)})" if notes else "")
     note = " ".join([had.content.rstrip(), *adds])
     ctx = Context(conversation_id=bus.MAIN, now=now_ms())
     ctx.memory = MemoryReader(Slice(structured=list(_KINDS.values()), tasks="open"))
@@ -231,6 +242,7 @@ async def run_once(now: int | None = None, llm=None) -> dict:
     now = now or now_ms()
     llm = llm or _llm()
     if llm is None:
+        await _db.audit("dream_error", "dreamer", "no model: set dreamer.llm (or llm) with a real api_key")
         return {"error": "no model"}
     night = datetime.fromtimestamp(now / 1000).strftime("%Y-%m-%d")  # noqa: DTZ006 — local, by design
     async with _db.get_db() as c:                     # a week unanswered: it closes itself
@@ -238,14 +250,16 @@ async def run_once(now: int | None = None, llm=None) -> dict:
                         "WHERE status='open' AND created_at<?", (now, now - EXPIRE_DAYS * _DAY))
         await c.commit()
     local = datetime.fromtimestamp(now / 1000)  # noqa: DTZ006
+    history = await _history(now)
     context = (f"It is now {local:%A %d %B %Y, %H:%M} local time. Two weeks ago was "
                f"{(local - timedelta(days=14)):%Y-%m-%d}. Slots that ended before now have passed.\n\n"
                f"Already raised (do not raise again; an outcome is the user's answer):\n"
-               f"{json.dumps(await _history(now), ensure_ascii=False) or '[]'}")
+               f"{json.dumps(history, ensure_ascii=False)}")
     text = await llm.complete(PROMPT.format(cap=CAP), [{"role": "user", "content": context}],
                               tools=_tools(), max_hops=HOPS)
     out = _parse(text)
-    known, dropped = await _known_ids(), []
+    dropped = []
+    seen = {norm(h["title"] or "") for h in history}
     kept: list[tuple[str, dict]] = []
     for kind, key in (("ask", "asks"), ("look", "looks")):
         for item in out.get(key) or []:
@@ -253,7 +267,9 @@ async def run_once(now: int | None = None, llm=None) -> dict:
                 continue
             if not item.get("evidence"):
                 dropped.append(f"{item['title'][:60]}: no evidence")
-            elif bad := _bad_ids(item, known):
+            elif norm(item["title"]) in seen:
+                dropped.append(f"{item['title'][:60]}: raised before")
+            elif bad := await _bad_ids(item):
                 dropped.append(f"{item['title'][:60]}: unknown ids {bad}")
             else:
                 kept.append((kind, item))
@@ -315,6 +331,7 @@ async def items(status: str = "open") -> list[dict]:
     async with _db.get_db() as c:
         cur = await c.execute(f"SELECT * FROM dream_items {where} ORDER BY created_at DESC, rowid LIMIT 200")
         rows = await cur.fetchall()
+    from .mcp_server import _iso
     return [{"id": r["id"], "night": r["night"], "kind": r["kind"], **json.loads(r["body"]), "status": r["status"],
              **({"outcome": r["outcome"], "closed": _iso(r["closed_at"])} if r["status"] == "closed" else {})}
             for r in rows]

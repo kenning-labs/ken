@@ -797,11 +797,9 @@ async def inbox_chat(item_id: str, text: str, timeout: float = 150.0) -> str:
         return json.dumps({"outcome": "no_item", "text": f"no open item {item_id!r} in the Inbox"})
     body = await _post(ActionKind.TOOL, json.dumps({"tool": "inbox_chat", "args": {"item_id": item_id, "text": text}}),
                        meta={"source": "Dreamer Inbox", "provenance": "user"}, timeout=timeout)
-    item = await dream.get(item_id)
-    last = ((item or {}).get("thread") or [{}])[-1]
-    return json.dumps({"reply": body.get("text"), "outcome": body.get("outcome"),
-                       "actions": last.get("actions", []) if last.get("role") == "dreamer" else [], "item": item},
-                      ensure_ascii=False)
+    # this turn's own actions and cards come in the engine's answer to THIS action, never from the thread
+    return json.dumps({"reply": body.get("text"), "outcome": body.get("outcome"), "actions": body.get("actions") or [],
+                       "cards": body.get("cards") or [], "item": await dream.get(item_id)}, ensure_ascii=False)
 
 
 _RECORD_CARDS = ("SELECT ask_id, evidence FROM pending WHERE kind=?1 OR kind LIKE '%:' || ?1 "

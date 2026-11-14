@@ -1,4 +1,5 @@
 """The Dreamer: the engine checks what the model says before anything reaches the user."""
+import asyncio
 import json
 from datetime import datetime
 
@@ -72,7 +73,7 @@ async def test_a_night_keeps_what_its_evidence_holds_and_drops_the_rest(tmp_path
     assert {i["title"] for i in items} >= {"real", "slack ts is not an id"} and all(i["status"] == "open" for i in items)
 
 
-async def test_tidy_becomes_a_card_only_with_an_event_behind_it(tmp_path):
+async def test_tidy_is_an_inbox_fix_never_a_card(tmp_path):
     _, when = await _setup(tmp_path)
     night = {"asks": [], "looks": [], "tidy": [
         {"kind": "project", "name": "emigration", "add": "The consulate requires a round-trip ticket.",
@@ -84,15 +85,85 @@ async def test_tidy_becomes_a_card_only_with_an_event_behind_it(tmp_path):
          "why": "same record, a second fact", "source": {"event": when}},
         {"kind": "person", "name": "nobody", "add": "x", "source": {"event": when}}]}
     done = await dream.run_once(llm=FakeLLM(night))
-    # one card per record (a second would replace the first), the unproven facts left out
-    assert done["tidy"][0] == "emigration: pending (a fact with no event or chat message behind it was left out; " \
+    # one fix per record, the unproven facts left out, and no card in the shared queue
+    assert done["tidy"][0] == "emigration: proposed (a fact with no event or chat message behind it was left out; " \
                               "a fact with no event or chat message behind it was left out)"
     assert "no person 'nobody'" in done["tidy"][1]
-    (card,) = await mcp_server.pending_cards()
-    assert "Moving to Portugal on a D8 visa. The consulate requires a round-trip ticket. " \
-           "The consulate answered on the 13th." in json.dumps(card)
+    assert await mcp_server.pending_cards() == []
+    (fix,) = await dream.items()
+    assert (fix["kind"], fix["title"]) == ("tidy", "Add to emigration")
+    assert fix["add"] == "The consulate requires a round-trip ticket. The consulate answered on the 13th."
     rec = next(e for e in await store.get_structured("projects.") if e.kind == "projects.emigration")
-    assert rec.content == "Moving to Portugal on a D8 visa."         # untouched until the user says yes
+    assert rec.content == "Moving to Portugal on a D8 visa."         # untouched until the user applies it
+    again = await dream.run_once(llm=FakeLLM(night))                 # the next night: one fix per record waits
+    assert again["tidy"][0].startswith("emigration: a fix for it already waits in the Inbox")
+
+
+async def _pumped(eng, coro):
+    """Run an MCP call while the engine drains its inbox, as the live engine would."""
+    async def pump():
+        for _ in range(60):
+            await eng.pump_inbox(); await asyncio.sleep(0.05)
+    t = asyncio.create_task(pump())
+    try:
+        return json.loads(await coro)
+    finally:
+        t.cancel()
+
+
+async def test_apply_saves_the_fix_on_the_note_as_it_is_now(tmp_path):
+    from ken.engine import Engine
+    _, when = await _setup(tmp_path)
+    await dream.run_once(llm=FakeLLM({"tidy": [{"kind": "project", "name": "emigration",
+                                               "add": "The consulate requires a round-trip ticket.", "source": {"event": when}}]}))
+    (fix,) = await dream.items()
+    # the user edits the note after the night: Apply keeps the edit and adds the fix
+    await store.upsert_structured(StructuredEntry(id="projects.emigration", kind="projects.emigration", subject="emigration",
+                                                  content="Moving to Portugal on a D8 visa in June.",
+                                                  provenance=Provenance.USER_STATED), change_note="test")
+    eng = Engine(); eng.register_agent(Assistant(llm=None), assistant=True)
+    out = await _pumped(eng, mcp_server.inbox_apply(fix["id"]))
+    assert out["outcome"] == "applied", out
+    rec = next(e for e in await store.get_structured("projects.") if e.kind == "projects.emigration")
+    assert rec.content == "Moving to Portugal on a D8 visa in June. The consulate requires a round-trip ticket."
+    assert await mcp_server.pending_cards() == []                   # the tap was the consent: no card left
+    assert (await dream.items("closed"))[0]["outcome"] == "applied"
+
+
+async def test_apply_waits_while_an_outside_card_holds_the_record(tmp_path):
+    from ken.agents.base import Proposal
+    from ken.consent import gate
+    from ken.contracts import Evidence
+    _, when = await _setup(tmp_path)
+    await dream.run_once(llm=FakeLLM({"tidy": [{"kind": "project", "name": "emigration",
+                                               "add": "The consulate requires a round-trip ticket.", "source": {"event": when}}]}))
+    await gate.apply(Proposal(intent="structured:projects.emigration", content="Moving to Spain instead.",
+                              evidence=[Evidence(ref="x", source="codex")]), conversation_id=bus.MAIN, author="codex")
+    (fix,) = await dream.items()
+    out = json.loads(await mcp_server.inbox_apply(fix["id"]))
+    assert out["outcome"] == "blocked" and "answer it first" in out["text"]
+    (card,) = await mcp_server.pending_cards()
+    assert card["raised_by"] == "codex"                              # the agent's card is untouched
+    assert (await dream.items())[0]["status"] == "open"
+
+
+async def test_old_dreamer_cards_go_back_and_agents_cannot_apply(tmp_path):
+    from ken.agents.base import Proposal
+    from ken.consent import gate
+    from ken.contracts import Evidence
+    _, when = await _setup(tmp_path)
+    await gate.apply(Proposal(intent="structured:projects.emigration", content="Moving to Portugal. Old style.",
+                              evidence=[Evidence(ref="dreamer:x", source="Dreamer")]), conversation_id=bus.MAIN, author="Dreamer")
+    assert len(await mcp_server.pending_cards()) == 1
+    await dream.run_once(llm=FakeLLM({"tidy": [{"kind": "project", "name": "emigration",
+                                               "add": "The consulate requires a round-trip ticket.", "source": {"event": when}}]}))
+    assert await mcp_server.pending_cards() == []                   # withdrawn: the Dreamer keeps no cards
+    (fix,) = await dream.items()
+    tok = mcp_server._CALLER.set("mcp:agent:codex")
+    try:
+        assert json.loads(await mcp_server.inbox_apply(fix["id"]))["outcome"] == "forbidden"
+    finally:
+        mcp_server._CALLER.reset(tok)
 
 
 async def test_closed_items_feed_the_next_night_and_old_ones_expire(tmp_path):
@@ -146,16 +217,82 @@ async def test_an_agent_token_cannot_close_the_inbox(tmp_path):
     assert (await dream.items("closed"))[0]["outcome"] == "Leave it"
 
 
-async def test_a_link_alone_and_a_fact_from_an_unrelated_event_are_refused(tmp_path):
+async def _person(name, note="A colleague."):
+    await store.upsert_structured(StructuredEntry(id=f"people.{name}", kind=f"people.{name}", subject=name, content=note,
+                                                  provenance=Provenance.USER_STATED), change_note="test")
+
+
+async def test_unproven_facts_and_links_to_nobody_are_refused_a_real_link_applies(tmp_path):
+    from ken.engine import Engine
     _, when = await _setup(tmp_path)
+    await _person("maria")
     night = {"tidy": [
         {"kind": "project", "name": "emigration", "add": "", "link": {"kind": "person", "name": "x", "rel": "member"}},
         {"kind": "project", "name": "emigration", "add": "Sashko sold the car in October.",   # the 17:45 event is about tickets
-         "source": {"event": when}}]}
+         "source": {"event": when}},
+        {"kind": "person", "name": "maria", "add": "", "link": {"kind": "project", "name": "emigration", "rel": "member"}}]}
     done = await dream.run_once(llm=FakeLLM(night))
-    assert done["tidy"] == [("emigration: a link with no fact to confirm it was left out "
-                            "(a fact with no event or chat message behind it was left out)")]
-    assert await mcp_server.pending_cards() == []                   # nothing saved, nothing asked
+    assert done["tidy"][0].startswith("emigration: nothing to add (a link to 'x', which Ken does not hold")
+    assert done["tidy"][1] == "maria: proposed"
+    (fix,) = await dream.items()
+    assert (fix["title"], fix["add"]) == ("Link maria", "")
+    eng = Engine(); eng.register_agent(Assistant(llm=None), assistant=True)
+    out = await _pumped(eng, mcp_server.inbox_apply(fix["id"]))
+    assert out["outcome"] == "applied", out
+    assert {(lk["src"], lk["dst"]) for lk in await store.links_of(["people.maria"])} == {("people.maria", "projects.emigration")}
+
+
+async def test_apply_finds_the_record_by_its_key_and_adds_only_missing_sentences(tmp_path):
+    from ken.engine import Engine
+    _, when = await _setup(tmp_path)
+    # the record's display subject differs from its key: Apply must still write projects.emigration
+    await store.upsert_structured(StructuredEntry(id="projects.emigration", kind="projects.emigration", subject="Emigration to Portugal",
+                                                  content="Moving on a D8 visa.", provenance=Provenance.USER_STATED), change_note="test")
+    await dream.run_once(llm=FakeLLM({"tidy": [
+        {"kind": "project", "name": "emigration", "add": "The consulate requires a round-trip ticket.", "source": {"event": when}},
+        {"kind": "project", "name": "emigration", "add": "The consulate answered on the 13th.", "source": {"event": when}}]}))
+    (fix,) = await dream.items()
+    await store.upsert_structured(StructuredEntry(id="projects.emigration", kind="projects.emigration", subject="Emigration to Portugal",
+                                                  content="Moving on a D8 visa. The consulate answered on the 13th.",
+                                                  provenance=Provenance.USER_STATED), change_note="the user typed one fact")
+    eng = Engine(); eng.register_agent(Assistant(llm=None), assistant=True)
+    assert (await _pumped(eng, mcp_server.inbox_apply(fix["id"])))["outcome"] == "applied"
+    kinds = [e.kind for e in await store.get_structured("projects.")]
+    assert kinds == ["projects.emigration"]                          # no copy under another key
+    rec = (await store.get_structured("projects."))[0]
+    assert rec.content == "Moving on a D8 visa. The consulate answered on the 13th. The consulate requires a round-trip ticket."
+    assert rec.evidence and rec.evidence[-1].ref.startswith("dreamer:")   # the fix keeps where it came from
+
+
+async def test_a_skipped_fact_is_not_proposed_again(tmp_path):
+    _, when = await _setup(tmp_path)
+    night = {"tidy": [{"kind": "project", "name": "emigration", "add": "The consulate requires a round-trip ticket.",
+                       "source": {"event": when}}]}
+    await dream.run_once(llm=FakeLLM(night))
+    (fix,) = await dream.items()
+    await dream.close(fix["id"], "skipped")
+    llm = FakeLLM(night)
+    again = await dream.run_once(llm=llm)
+    assert again["tidy"] == ["emigration: nothing to add (a fact you skipped before was left out)"]
+    assert "The consulate requires a round-trip ticket." in llm.prompts[0]   # the model sees which fact was refused
+
+
+async def test_a_card_an_earlier_apply_left_is_approved_not_a_block(tmp_path):
+    from ken.agents.base import Proposal
+    from ken.consent import gate
+    from ken.contracts import Evidence
+    from ken.engine import Engine
+    _, when = await _setup(tmp_path)
+    await dream.run_once(llm=FakeLLM({"tidy": [{"kind": "project", "name": "emigration",
+                                               "add": "The consulate requires a round-trip ticket.", "source": {"event": when}}]}))
+    (fix,) = await dream.items()
+    # Ken was busy: the first Apply's write landed later as a card, with the Dreamer as its source
+    await gate.apply(Proposal(intent="structured:projects.emigration",
+                              content="Moving to Portugal on a D8 visa. The consulate requires a round-trip ticket.",
+                              evidence=[Evidence(ref="dreamer:x", source="Dreamer")]), conversation_id=bus.MAIN, author="kip")
+    eng = Engine(); eng.register_agent(Assistant(llm=None), assistant=True)
+    assert (await _pumped(eng, mcp_server.inbox_apply(fix["id"])))["outcome"] == "applied"
+    assert await mcp_server.pending_cards() == []
 
 
 async def test_answered_cards_are_known_ids_and_a_repeat_title_is_dropped(tmp_path):

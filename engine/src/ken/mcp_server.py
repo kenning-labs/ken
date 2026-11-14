@@ -786,6 +786,69 @@ async def events(since: str = "", until: str = "", now: int | None = None, answe
     return json.dumps(out)
 
 
+_RECORD_CARDS = ("SELECT ask_id, evidence FROM pending WHERE kind=?1 OR kind LIKE '%:' || ?1 "
+                 "OR kind LIKE 'identity:' || ?1 || ':%'")
+
+
+async def _record_cards(kind: str) -> tuple[list[str], list[str]]:
+    """The open cards on one record, in any conversation: (the Dreamer's own Apply left them, everyone else's)."""
+    async with db.get_db() as c:
+        rows = await (await c.execute(_RECORD_CARDS, (kind,))).fetchall()
+    mine = [r["ask_id"] for r in rows if any(e.source == "Dreamer" for e in store.evidence_load(r["evidence"]))]
+    return mine, [r["ask_id"] for r in rows if r["ask_id"] not in mine]
+
+
+async def inbox_apply(item_id: str) -> str:
+    """Apply one proposed Inbox fix as the user's own instruction: remember() the note as it is NOW
+    plus each added sentence it still lacks, with the fix's links, then approve the card(s) that
+    write raised (the tap was the consent). Refused while someone else's card on the record is open
+    (a second card on a record would replace the first). A card an earlier Apply left behind (Ken
+    was busy) is approved, not a block. Success is read back from the record, never assumed."""
+    from . import dream
+    if _caller().startswith("mcp:agent"):
+        return json.dumps({"outcome": "forbidden", "text": "the Inbox is the user's: an agent token cannot apply a fix"})
+    item = await dream.get(item_id)
+    if item is None or item["kind"] != "tidy" or item["status"] != "open":
+        return json.dumps({"outcome": "no_item", "text": f"no open fix {item_id!r} in the Inbox"})
+    rec, kind = item["record"], item["record"]["id"]
+    mine, theirs = await _record_cards(kind)
+    if theirs:
+        return json.dumps({"outcome": "blocked", "text": f"a card about {rec['name']} waits in Ken wants to check: "
+                                                         "answer it first, then apply this fix"})
+    ns = kind.split(".", 1)[0]
+    now = next((e for e in await store.get_structured(ns + ".") if e.kind == kind), None)
+    if now is None:
+        await dream.close(item_id, "the record is gone")
+        return json.dumps({"outcome": "no_record", "text": f"{rec['name']} is no longer in Ken, so the fix was closed"})
+    adds = item.get("adds") or ([item["add"]] if item.get("add") else [])
+    missing = [x for x in adds if norm(x) not in norm(now.content)]
+    cards = mine
+    if not mine:
+        args = {"kind": rec["kind"], "name": kind.split(".", 1)[1], "note": " ".join([now.content.rstrip(), *missing])}
+        if item.get("links"):
+            args["links"] = item["links"]
+        ref = f"dreamer:{item.get('night', '')} " + json.dumps(item.get("sources") or [], ensure_ascii=False)
+        out = json.loads(await typed("remember", args, source="Dreamer", provenance="user", ref=ref[:2000]))
+        if out.get("outcome") == "queued":
+            return json.dumps({"outcome": "queued", "text": "Ken is busy. Press Apply again in a minute."})
+        cards = out.get("cards") or []
+    for card_id in cards:                                 # the tap was the consent
+        await decide(card_id, True)
+    # read back: every added sentence is in the note and every link exists, or it was not saved
+    after = next((e for e in await store.get_structured(ns + ".") if e.kind == kind), None)
+    linked = {(lk["src"], lk["dst"]) for lk in await store.links_of([kind])}
+    ns_of = {"person": "people", "project": "projects", "asset": "assets"}
+    want = [f"{ns_of.get(str(lk.get('kind')).lower())}.{slug(str(lk.get('name') or ''))}" for lk in item.get("links") or []]
+    ok = (after is not None and all(norm(x) in norm(after.content) for x in adds)
+          and all((kind, w) in linked or (w, kind) in linked for w in want))
+    left, _ = await _record_cards(kind)
+    if ok:
+        await dream.close(item_id, "applied")
+        return json.dumps({"outcome": "applied", "text": f"Saved to {rec['name']}."})
+    return json.dumps({"outcome": "not_saved", "text": f"{rec['name']} did not change"
+                       + (": a card from this fix still waits in Ken wants to check" if left else "")})
+
+
 async def decide(card_id: str, approved: bool, edited: str = "", timeout: float = 30.0) -> str:
     """Answer one open card on the USER's behalf: the one tap every client makes, anchored to
     the card so the refusal enters kip's history. The outcome is the engine's own word
@@ -813,7 +876,7 @@ async def decide(card_id: str, approved: bool, edited: str = "", timeout: float 
 TOOL_NAMES = frozenset({"tasks", "get_context", "who_is", "find", "add_task", "complete_task", "discard_task",
                         "reschedule_task", "log_event", "remember", "forget", "tell", "pending", "decide",
                         "hydrate", "world", "schedule_task", "assign_task", "link_tasks", "events", "chat_history",
-                        "inbox", "inbox_close"})
+                        "inbox", "inbox_close", "inbox_apply"})
 
 
 _AT = "`at` = when this change HAPPENED (local ISO date or datetime), for a late report; a change older than the task's last change is refused as `stale` and nothing changes. Empty = now."
@@ -1059,6 +1122,14 @@ def build_server():
     async def inbox_tool(status: str = "open") -> str:
         from . import dream
         return json.dumps({"items": await dream.items(str(status or "open").lower())}, ensure_ascii=False)
+
+    @srv.tool(name="inbox_apply", description=(
+        "Apply one proposed fix from the Inbox (kind tidy): its `add` is appended to the record's note as it "
+        "is now, with its links. The user's tap is the consent, so nothing waits for a second yes. If an "
+        "outside agent's card on the same record waits in pending, nothing changes: answer that card first. "
+        "To skip a fix, use inbox_close. The user's token only."))
+    async def inbox_apply_tool(item_id: str) -> str:
+        return await inbox_apply(item_id)
 
     @srv.tool(name="inbox_close", description=(
         "Close one Inbox item with the user's answer: a quick answer they picked, or their own words. The "

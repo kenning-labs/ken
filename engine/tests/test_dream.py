@@ -95,13 +95,6 @@ async def test_tidy_becomes_a_card_only_with_an_event_behind_it(tmp_path):
     assert rec.content == "Moving to Portugal on a D8 visa."         # untouched until the user says yes
 
 
-async def test_at_most_three_tidy_cards_a_night(tmp_path):
-    _, when = await _setup(tmp_path)
-    night = {"tidy": [{"kind": "person", "name": f"p{i}", "add": "x", "source": {"event": when}} for i in range(5)]}
-    done = await dream.run_once(llm=FakeLLM(night))
-    assert [t for t in done["tidy"] if "over the cap" in t] == ["p3: over the cap of 3", "p4: over the cap of 3"]
-
-
 async def test_closed_items_feed_the_next_night_and_old_ones_expire(tmp_path):
     task, _ = await _setup(tmp_path)
     now = now_ms()

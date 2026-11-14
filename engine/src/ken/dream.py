@@ -7,7 +7,7 @@ read tools and a reasoning model, then:
   tidy   an additive fix to a record (a fact a note lacks, a missing link) -> a confirm card
          through the gate: proposed, never applied, until the user trusts it
 
-Asks and looks together are capped at CAP a night, tidy cards at TIDY_CAP; a quiet night says nothing. Nothing the
+Asks and looks together are capped at CAP a night; a quiet night says nothing. Nothing the
 model writes is taken on its word: an item that cites an id Ken does not hold is dropped, and
 a tidy fact must rest on an event or a chat message at the time it names (a task's status is
 never proof). Closed items and their outcomes go back into the next night's prompt, so the
@@ -35,7 +35,6 @@ from .tools.base import Tool
 from .util import new_id, norm, now_ms, slug
 
 CAP = 6                  # asks + looks a night, at most
-TIDY_CAP = 3             # tidy cards a night: each one is a tap while tidy is proposed, not applied
 EXPIRE_DAYS = 7          # an item nobody answered closes itself after a week
 HISTORY_DAYS = 14        # how far back the prompt shows past items and their outcomes
 HOPS = 16                # tool rounds a night may take
@@ -70,7 +69,6 @@ How to work:
   exactly from the tool answers. Never guess numbers: count them.
 - Never ask again about something in "Already raised" below, or something the user answered on a card.
 - At most {cap} items across asks and looks together, the most important first. Fewer is fine.
-- At most {tidy_cap} tidy items, the most useful first.
 - Write like a calm, sharp colleague: plain words, short sentences, no hype. Address the user as "you".
 - Each ask has 2 or 3 quick answers you could carry out, the first one your recommendation.
 
@@ -244,7 +242,7 @@ async def run_once(now: int | None = None, llm=None) -> dict:
                f"{(local - timedelta(days=14)):%Y-%m-%d}. Slots that ended before now have passed.\n\n"
                f"Already raised (do not raise again; an outcome is the user's answer):\n"
                f"{json.dumps(await _history(now), ensure_ascii=False) or '[]'}")
-    text = await llm.complete(PROMPT.format(cap=CAP, tidy_cap=TIDY_CAP), [{"role": "user", "content": context}],
+    text = await llm.complete(PROMPT.format(cap=CAP), [{"role": "user", "content": context}],
                               tools=_tools(), max_hops=HOPS)
     out = _parse(text)
     known, dropped = await _known_ids(), []
@@ -271,8 +269,8 @@ async def run_once(now: int | None = None, llm=None) -> dict:
     for t in out.get("tidy") or []:
         if isinstance(t, dict):
             groups.setdefault((str(t.get("kind")).lower(), slug(str(t.get("name") or ""))), []).append(t)
-    tidy = [f"{g[0].get('name')}: over the cap of {TIDY_CAP}" for g in list(groups.values())[TIDY_CAP:]]
-    for group in list(groups.values())[:TIDY_CAP]:
+    tidy = []
+    for group in groups.values():
         name = group[0].get("name")
         try:
             tidy.append(f"{name}: {await _tidy(group, night)}")

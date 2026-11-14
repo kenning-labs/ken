@@ -1,6 +1,6 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/header-dark.png">
-  <img alt="ken. The current state of your life, for every AI you use. Not what was said. What is true now. On your machine. A judge keeps it true." src=".github/assets/header-light.png" width="100%">
+  <img alt="ken. A head drawn in dots, with small worlds, your agents, around it. The current state of your life, for every AI you use. Not what was said. What is true now." src=".github/assets/header-light.png" width="100%">
 </picture>
 
 <p align="center">
@@ -276,7 +276,7 @@ machine and disk of your own in Frankfurt (EU). Sign in with Google, paste one U
 ChatGPT, where custom connectors are on), and see your day and your world in a web app. Model calls are included, so you need no API
 key. **[Get early access →](https://kenninglabs.com/?ref=github)**
 
-<img alt="The Ken Cloud web app on a demo world: today's plan with a done and an upcoming work slot next to calendar events, a chat with Ken, a card from an agent waiting for yes or no, and the queue of tasks by deadline." src=".github/assets/cloud-day.png" width="100%">
+<img alt="The Ken Cloud Today page on a sample day: calendar events and work slots on one timeline (two done, the now line at 10:05), a chat where Ken moved a task after lunch, two cards from Cursor and ChatGPT waiting for yes or no, and to-dos grouped as overdue, today, this week and later." src=".github/assets/cloud-day.png" width="100%">
 
 | | Self-hosted | Ken Cloud |
 |---|---|---|

@@ -446,6 +446,30 @@ async def test_chat_loop_feeds_tool_results_back_as_tool_messages():
     assert msgs[-1] == {"role": "tool", "tool_call_id": "c0", "content": "pong"}
 
 
+async def test_chat_loop_sends_effort_and_returns_the_thinking_with_its_calls():
+    """DeepSeek: a set effort goes as reasoning_effort; the reasoning_content of a tool-call turn goes back."""
+    async def ping(**kw):
+        return "pong"
+    tool = Tool("ping", "ping", {"type": "object", "properties": {}}, ping)
+
+    def script(i, kw):
+        if i:
+            return _Completion("done")
+        c = _Completion("", [_TC()])
+        c.choices[0].message.reasoning_content = "I should ping"
+        return c
+
+    llm = _fake_chat_llm(script)
+    llm._effort = "max"
+    assert await llm.complete("sys", [{"role": "user", "content": "hi"}], tools=[tool]) == "done"
+    turns = llm._client.chat.completions.turns
+    assert all(t["reasoning_effort"] == "max" for t in turns)
+    assert turns[1]["messages"][-2]["reasoning_content"] == "I should ping"
+    plain = _fake_chat_llm(lambda i, kw: _Completion("done"))      # no effort set: no field, as before
+    await plain.complete("sys", [{"role": "user", "content": "hi"}], tools=[tool])
+    assert "reasoning_effort" not in plain._client.chat.completions.turns[0]
+
+
 async def test_chat_loop_hop_cap_forces_a_tools_off_answer():
     async def ping(**kw):
         return "pong"

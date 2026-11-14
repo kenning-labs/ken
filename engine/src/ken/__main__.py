@@ -11,6 +11,7 @@
   ken push            send the open cards to push.url (run it from a 09:00 scheduler)
   ken decide ID yes|no [--edited …]   answer one card (the same tap any client makes)
   ken maintain        run the maintainer pass now
+  ken dream           run the Dreamer's night now (needs a model)
 
 Dev-loop commands for authoring plug-in agents/connectors (drop a file into
 ``~/.ken/agents`` or ``~/.ken/connectors`` — see the `example` files):
@@ -732,6 +733,9 @@ def build_parser() -> argparse.ArgumentParser:
     maintp = sub.add_parser("maintain", help="run the maintainer pass now (done? and still-real? cards)")
     maintp.add_argument("--db", help="database path (default ~/.ken/ken.db)")
 
+    dreamp = sub.add_parser("dream", help="run the Dreamer's night now: asks and looks to the Inbox, tidy to cards")
+    dreamp.add_argument("--db", help="database path (default ~/.ken/ken.db)")
+
     evalp = sub.add_parser("eval", help="the card scoreboard; or `eval reconcile` / `eval context` (the gated evals)")
     evalp.add_argument("suite", nargs="?", choices=["reconcile", "context"],
                        help="reconcile: real reports → typed outcomes (real tiers); context: get_context cases")
@@ -820,6 +824,18 @@ def main() -> None:
             print(f"ken: maintainer raised {d['loop_cards']} done? card(s), {d['stale_cards']} still-real? "
                   f"card(s); {d['expired_events']} event(s) expired")
         asyncio.run(_m())
+        return
+
+    if args.cmd == "dream":
+        async def _d() -> None:
+            await db.init_db()
+            from .dream import run_once
+            d = await run_once()
+            if d.get("error"):
+                raise SystemExit(f"ken: the Dreamer could not run: {d['error']}")
+            print(f"ken: {d['asks']} ask(s) and {d['looks']} look(s) in the Inbox; tidy: {d['tidy'] or 'none'}; "
+                  f"dropped: {d['dropped'] or 'none'}")
+        asyncio.run(_d())
         return
 
     # "run", its "serve" alias, and the bare `ken`: the long-lived engine loop.

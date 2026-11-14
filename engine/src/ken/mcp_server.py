@@ -812,7 +812,8 @@ async def decide(card_id: str, approved: bool, edited: str = "", timeout: float 
 
 TOOL_NAMES = frozenset({"tasks", "get_context", "who_is", "find", "add_task", "complete_task", "discard_task",
                         "reschedule_task", "log_event", "remember", "forget", "tell", "pending", "decide",
-                        "hydrate", "world", "schedule_task", "assign_task", "link_tasks", "events", "chat_history"})
+                        "hydrate", "world", "schedule_task", "assign_task", "link_tasks", "events", "chat_history",
+                        "inbox", "inbox_close"})
 
 
 _AT = "`at` = when this change HAPPENED (local ISO date or datetime), for a late report; a change older than the task's last change is refused as `stale` and nothing changes. Empty = now."
@@ -1049,6 +1050,27 @@ def build_server():
         "user where a card came from (the source tag, the ref as a link when it is a URL) before they decide."))
     async def pending_tool() -> str:
         return json.dumps(await pending_cards())
+
+    @srv.tool(name="inbox", description=(
+        "The Dreamer's Inbox: what its nightly read of Ken found. kind ask = needs the user's decision "
+        "(quick = answers it suggests, the first its recommendation); kind look = worth knowing, no decision. "
+        "Each item cites its evidence. `status`: open (default) | closed (with the outcome) | all. Show an open "
+        "item to the user, then record their answer with inbox_close."))
+    async def inbox_tool(status: str = "open") -> str:
+        from . import dream
+        return json.dumps({"items": await dream.items(str(status or "open").lower())}, ensure_ascii=False)
+
+    @srv.tool(name="inbox_close", description=(
+        "Close one Inbox item with the user's answer: a quick answer they picked, or their own words. The "
+        "Dreamer reads it the next night and never asks the same again. Carry out the answer with the other "
+        "tools first (move, close or add tasks), then close the item. The user's token only."))
+    async def inbox_close_tool(item_id: str, outcome: str) -> str:
+        from . import dream
+        if _caller().startswith("mcp:agent"):
+            return json.dumps({"outcome": "forbidden", "text": "the Inbox is the user's: an agent token cannot close it"})
+        ok = await dream.close(item_id, outcome)
+        return json.dumps({"outcome": "closed" if ok else "no_item",
+                           "text": "closed" if ok else f"no open Inbox item {item_id!r}"})
 
     @srv.tool(name="decide", description=(
         "Answer one card on the user's behalf after asking them: approved true/false; `edited` = the "

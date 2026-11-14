@@ -276,7 +276,10 @@ machine and disk of your own in Frankfurt (EU). Sign in with Google, paste one U
 ChatGPT, where custom connectors are on), and see your day and your world in a web app. Model calls are included, so you need no API
 key. **[Get early access →](https://kenninglabs.com/?ref=github)**
 
-<img alt="The Ken Cloud Today page on a sample day: calendar events and work slots on one timeline (two done, the now line at 10:05), a chat where Ken moved a task after lunch, two cards from Cursor and ChatGPT waiting for yes or no, and to-dos grouped as overdue, today, this week and later." src=".github/assets/cloud-day.png" width="100%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/cloud-day-dark.png">
+  <img alt="The Ken Cloud Today page on a sample day: calendar events and work slots on one timeline (two done, the now line at 10:05), a chat where Ken moved a task after lunch, two cards from Cursor and ChatGPT waiting for yes or no, and to-dos grouped as overdue, today, this week and later." src=".github/assets/cloud-day.png" width="100%">
+</picture>
 
 | | Self-hosted | Ken Cloud |
 |---|---|---|

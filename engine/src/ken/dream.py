@@ -556,6 +556,8 @@ def _link_text(kind: str, lk: dict) -> str:
 
 # an id in brackets right after a quoted name: the name already says it
 _ID_AFTER_NAME = re.compile(r"([\"\u201d])\s*\(\s*(?:tasks?\s+)?(\b(?=[0-9]*[a-f])[0-9a-f]{8,32}\b)\s*\)")
+# an id right before a quoted name ('Task <id> "Ken: ship it"'): the name already says it
+_ID_BEFORE_NAME = re.compile(r"(?:\b[Tt]asks?\s+)?\b((?=[0-9]*[a-f])[0-9a-f]{8,32})\b:?\s+(?=[\"\u201c])")
 # "task <id>" or a bare id: one pass, so a name put in is never scanned again
 _ANY_ID = re.compile(r"(?:\b[Tt]asks?\s+)?(\b(?=[0-9]*[a-f])[0-9a-f]{8,32}\b)")
 _KEEP = ("id", "record", "sources")                       # never shown as text, never rewritten
@@ -582,6 +584,7 @@ async def readable(value):
 
     def text(v: str) -> str:
         v = _ID_AFTER_NAME.sub(lambda m: m.group(1) if name(m.group(2)) else m.group(0), v)
+        v = _ID_BEFORE_NAME.sub(lambda m: "" if name(m.group(1)) else m.group(0), v)
         return _ANY_ID.sub(lambda m: name(m.group(1)) or m.group(0), v)
 
     def walk(v):

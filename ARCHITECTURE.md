@@ -51,7 +51,10 @@ flowchart LR
 name as given; `assign_task` moves it) and may wait on other tasks (`link_tasks`, table
 `task_deps`; rows carry `depends_on` and `blocked` while one is open; cycles are refused).
 `tasks(status=open|done|dropped|all)` and `events(since, until)` read history without a word
-search. Every direct write takes an optional `at` = when the change happened; a task keeps
+search. `events(answers=true)` adds the user's answers to cards in the window, read from the gate's
+`card_outcome` audit rows; each row keeps the channel whose call raised the card, so an agent
+token sees only its own cards. It is the resume step of an always-on agent: on its next run it
+asks what the user decided since its last run, instead of guessing from what disappeared. Every direct write takes an optional `at` = when the change happened; a task keeps
 `changed_at` (a record its `updated_at`), and a write whose `at` is older returns `stale` and
 changes nothing, so a late, old update never wins.
 

@@ -256,7 +256,7 @@ cron or launchd. Nothing waiting means nothing sent. Try it with `ken push --dry
 | Tool | What it does |
 |---|---|
 | `tasks`, `get_context` | open (or closed) tasks; everything that matters for one task, with the evidence for each item |
-| `who_is`, `find`, `world`, `events` | one person or project, a search, your whole world, what happened in a date range |
+| `who_is`, `find`, `world`, `events` | one person or project, a search, your whole world, what happened in a date range (with `answers=true`, also your yes/no on cards; an agent sees only the answers to its own cards) |
 | `add_task`, `complete_task`, `discard_task`, `reschedule_task`, `schedule_task` | task writes |
 | `assign_task`, `link_tasks` | who does a task; which task waits on which |
 | `log_event`, `remember`, `forget` | events, people, projects, preferences, facts |

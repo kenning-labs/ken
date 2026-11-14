@@ -1074,11 +1074,24 @@ def _batch_note(items: list) -> str:
 async def _outcome_row(ask_id: str, p, *, approved: bool) -> None:
     """The eval row `ken eval` reads: who proposed what kind of card, the tap, and how long it
     waited. JSON, so an author name with a space parses. Written only for a REAL outcome —
-    never for a stale re-raise or a no_pending tap."""
+    never for a stale re-raise or a no_pending tap. `kind` (what the card was about) and `channel`
+    (the credential whose call raised it, e.g. mcp:agent:<name>) let events(answers=true) hand each
+    agent the answers to ITS cards on its next run."""
     await _db.audit("card_outcome", ask_id, json.dumps({
         "author": p["author"], "ask_type": p["ask_type"] or "belief",
         "outcome": "approved" if approved else "rejected",
-        "age_ms": max(0, now_ms() - (p["created_at"] or now_ms()))}))
+        "age_ms": max(0, now_ms() - (p["created_at"] or now_ms())),
+        "kind": p["kind"], "channel": await _raised_by(p)}))
+
+
+async def _raised_by(p) -> str:
+    """The channel of the inbound action that raised this ask ('' when none is on record)."""
+    action_id = p["action_id"]                       # the column always exists (db.py migration)
+    if not action_id:
+        return ""
+    async with _db.get_db() as c:
+        row = await (await c.execute("SELECT channel FROM inbox WHERE id=?", (action_id,))).fetchone()
+    return str(row["channel"]) if row and row["channel"] else ""
 
 
 async def withdraw(ask_id: str, *, reason: str) -> None:

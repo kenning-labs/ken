@@ -468,6 +468,29 @@ async def events_between(lo: int, hi: int, *, now: int | None = None, limit: int
         return [_event(r) for r in await cur.fetchall()]
 
 
+async def card_answers(lo: int, hi: int, *, channel: str | None = None, limit: int = 200) -> list[dict]:
+    """The user's answers to cards in [lo, hi], newest first, from the gate's card_outcome rows:
+    {card_id, kind, ask_type, outcome (approved | rejected), channel, at}. With `channel`, only the
+    cards that channel's calls raised (an agent token sees its own cards, never another's)."""
+    async with _db.get_db() as c:
+        cur = await c.execute("SELECT ref, reason, at FROM audit WHERE kind='card_outcome' AND at BETWEEN ? AND ? "
+                              "ORDER BY at DESC", (lo, hi))
+        rows = await cur.fetchall()
+    out = []
+    for r in rows:
+        try:
+            d = json.loads(r["reason"] or "{}")
+        except ValueError:
+            continue
+        if channel is not None and d.get("channel") != channel:
+            continue
+        out.append({"card_id": r["ref"], "kind": d.get("kind", ""), "ask_type": d.get("ask_type", ""),
+                    "outcome": d.get("outcome", ""), "channel": d.get("channel", ""), "at": r["at"]})
+        if len(out) >= limit:
+            break
+    return out
+
+
 async def expired_events(now: int | None = None) -> int:
     """How many events have stopped mattering (a gauge for the maintainer's audit row)."""
     now = now or now_ms()

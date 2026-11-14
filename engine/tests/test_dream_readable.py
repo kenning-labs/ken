@@ -33,7 +33,7 @@ async def test_ids_become_task_names_in_every_shape_the_model_writes(tmp_path):
 
 
 async def test_the_inbox_tool_serves_names_and_link_sentences_the_right_way_round(tmp_path):
-    task, when = await _setup(tmp_path)
+    task, _ = await _setup(tmp_path)
     await store.upsert_structured(StructuredEntry(id="people.sashko", kind="people.sashko", subject="sashko", content="You.",
                                                   provenance=Provenance.USER_STATED), change_note="test")
     await dream.run_once(llm=FakeLLM({"asks": [_ask("x", f"task {task.id}")], "tidy": [

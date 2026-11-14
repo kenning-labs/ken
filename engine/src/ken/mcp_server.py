@@ -1133,11 +1133,13 @@ def build_server():
     @srv.tool(name="inbox", description=(
         "The Dreamer's Inbox: what its nightly read of Ken found. kind ask = needs the user's decision "
         "(quick = answers it suggests, the first its recommendation); kind look = worth knowing, no decision. "
-        "Each item cites its evidence. `status`: open (default) | closed (with the outcome) | all. Show an open "
+        "Each item cites its evidence, with task ids you can act on. `status`: open (default) | closed (with the outcome) | all. "
+        "`readable`: true puts task names in place of ids, for a page that shows the items as they are. Show an open "
         "item to the user, then record their answer with inbox_close."))
-    async def inbox_tool(status: str = "open") -> str:
+    async def inbox_tool(status: str = "open", readable: bool = False) -> str:
         from . import dream
-        return json.dumps({"items": await dream.items(str(status or "open").lower())}, ensure_ascii=False)
+        items = await dream.items(str(status or "open").lower())
+        return json.dumps({"items": await dream.readable(items) if readable else items}, ensure_ascii=False)
 
     @srv.tool(name="inbox_chat", description=(
         "Talk with the Dreamer about one open Inbox item: a quick answer the user tapped, or their own words. "

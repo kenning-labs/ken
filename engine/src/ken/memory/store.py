@@ -468,27 +468,34 @@ async def events_between(lo: int, hi: int, *, now: int | None = None, limit: int
         return [_event(r) for r in await cur.fetchall()]
 
 
-async def card_answers(lo: int, hi: int, *, channel: str | None = None, limit: int = 200) -> list[dict]:
+async def card_answers(lo: int, hi: int, *, channel: str | None = None, limit: int = 200) -> tuple[list[dict], bool]:
     """The user's answers to cards in [lo, hi], newest first, from the gate's card_outcome rows:
-    {card_id, kind, ask_type, outcome (approved | rejected), channel, at}. With `channel`, only the
-    cards that channel's calls raised (an agent token sees its own cards, never another's)."""
+    {card_id, kind, ask_type, outcome (approved | rejected | not_same), channel, at, kept?, dropped?,
+    held?}. With `channel`, only the cards that channel raised (an agent token sees its own cards,
+    never another's), filtered in SQL. One answer per card: the newest row wins (a failed apply
+    retried by a second tap leaves two rows). Returns (answers, more): `more` when the limit cut it."""
+    sql = ("SELECT ref, reason, at FROM audit WHERE kind='card_outcome' AND at BETWEEN ? AND ?"
+           + (" AND json_extract(reason, '$.channel') = ?" if channel is not None else "")
+           + " ORDER BY at DESC, rowid DESC")
+    args = (lo, hi) + ((channel,) if channel is not None else ())
+    out, seen, more = [], set(), False
     async with _db.get_db() as c:
-        cur = await c.execute("SELECT ref, reason, at FROM audit WHERE kind='card_outcome' AND at BETWEEN ? AND ? "
-                              "ORDER BY at DESC", (lo, hi))
-        rows = await cur.fetchall()
-    out = []
-    for r in rows:
-        try:
-            d = json.loads(r["reason"] or "{}")
-        except ValueError:
-            continue
-        if channel is not None and d.get("channel") != channel:
-            continue
-        out.append({"card_id": r["ref"], "kind": d.get("kind", ""), "ask_type": d.get("ask_type", ""),
-                    "outcome": d.get("outcome", ""), "channel": d.get("channel", ""), "at": r["at"]})
-        if len(out) >= limit:
-            break
-    return out
+        cur = await c.execute(sql, args)
+        async for r in cur:
+            if r["ref"] in seen:
+                continue
+            if len(out) >= limit:
+                more = True
+                break
+            try:
+                d = json.loads(r["reason"] or "{}")
+            except ValueError:
+                continue
+            seen.add(r["ref"])
+            out.append({"card_id": r["ref"], "kind": d.get("kind", ""), "ask_type": d.get("ask_type", ""),
+                        "outcome": d.get("outcome", ""), "channel": d.get("channel", ""), "at": r["at"],
+                        **{k: d[k] for k in ("kept", "dropped", "held") if k in d}})
+    return out, more
 
 
 async def expired_events(now: int | None = None) -> int:

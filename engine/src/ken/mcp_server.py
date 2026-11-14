@@ -767,10 +767,16 @@ async def events(since: str = "", until: str = "", now: int | None = None, answe
            "since": _iso(lo), "until": _iso(hi)}
     if answers:
         mine = _caller() if _caller().startswith("mcp:agent") else None
+        rows, more = await store.card_answers(lo, hi, channel=mine)
+        # yes / no, or not_same: on a "same record?" card, No means "save it as new" (a new card follows)
+        word = {"approved": "yes", "rejected": "no", "not_same": "not_same"}
         out["answers"] = [{"card_id": a["card_id"], "about": a["kind"], "type": a["ask_type"] or "belief",
-                           "answer": "yes" if a["outcome"] == "approved" else "no", "when": _iso(a["at"]),
+                           "answer": word.get(a["outcome"], a["outcome"]), "when": _iso(a["at"]),
+                           **{k: a[k] for k in ("kept", "dropped", "held") if k in a},
                            **({} if mine else {"raised_by": a["channel"] or "unknown"})}
-                          for a in await store.card_answers(lo, hi, channel=mine)]
+                          for a in rows]
+        if more:
+            out["more"] = True                           # the window held more answers: ask again with a later since
     return json.dumps(out)
 
 
@@ -1095,7 +1101,9 @@ def http_app(token: str | None, host: str = "127.0.0.1", agent_tokens: dict | No
         text = message_of((await request.body()).decode(errors="replace"))
         if not text:
             return PlainTextResponse("(empty message — no text in the request body)")
-        return PlainTextResponse(plain(await reply_to(text, "http:client")))
+        # the channel the token matched (mcp:user, mcp:agent:<name>), as for the MCP tools: an agent
+        # token posting here stays an agent (its provenance ceiling, and who raised its cards)
+        return PlainTextResponse(plain(await reply_to(text, _caller())))
 
     @srv.custom_route("/today", methods=["GET"])
     async def today_route(_: Request) -> PlainTextResponse:

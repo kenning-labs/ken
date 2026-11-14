@@ -12,6 +12,7 @@ superseded card names a deleted ask and is a safe no-op.
 from __future__ import annotations
 
 import json
+import logging
 from contextvars import ContextVar
 from dataclasses import replace
 from types import SimpleNamespace
@@ -431,7 +432,8 @@ async def _resolve_identity(ask_id: str, p, *, approved: bool, edit: str, author
     meta = json.loads(p["meta"]) if p["meta"] else {}
     evidence = store.evidence_load(p["evidence"])
     carried = {k: v for k, v in meta.items() if k not in ("context", "to")}   # task_id etc. ride on
-    common = {"evidence": evidence, "conversation_id": p["conversation_id"], "author": p["author"]}
+    common = {"evidence": evidence, "conversation_id": p["conversation_id"], "author": p["author"],
+              "raised_by": p["raised_by"] or ""}
     current = next((b for b in await store.get_structured(prefix=target) if b.kind == target), None)
 
     async def as_new(text: str) -> None:
@@ -442,7 +444,8 @@ async def _resolve_identity(ask_id: str, p, *, approved: bool, edit: str, author
                         note=_link_note(carried) or None, meta=carried, text=text, **common)
 
     if not approved:
-        await _outcome_row(ask_id, p, approved=False)
+        # No here means "not the same record", not "reject the proposal": it is asked again as new
+        await _outcome_row(ask_id, p, approved=False, outcome="not_same")
         await _db.audit("consent_reject", p["kind"], f"rejected by {author}: not the same")
         await as_new("Not the same — save it as new?")
         return "reasked"
@@ -486,15 +489,17 @@ async def _resolve_identity(ask_id: str, p, *, approved: bool, edit: str, author
 async def _swap_ask(old_ask_id: str, *, content: str, evidence: list, kind: str, ask_type: str, origin: str,
                     existing_snapshot: str | None, existing: str | None, note: str | None,
                     conversation_id: str, author: str, text: str, meta: dict | None = None,
-                    subject: str | None = None) -> None:
+                    subject: str | None = None, raised_by: str = "") -> None:
     """Replace one open ask with the next in ONE transaction, then post the message and
-    the card — a crash between the two leaves either ask, never neither."""
+    the card — a crash between the two leaves either ask, never neither. The next ask keeps
+    the old one's `raised_by`: the user's tap made it, but it answers the same caller's proposal."""
     proposal = SimpleNamespace(content=content, evidence=evidence, meta=meta or None, at=None)
     ask_id = new_id()
     async with _db.get_db() as c:
         await c.execute("DELETE FROM pending WHERE ask_id=?", (old_ask_id,))
         await _save_pending(ask_id, proposal, kind=kind, conversation_id=conversation_id, author=author,
-                            origin=origin, existing_snapshot=existing_snapshot, ask_type=ask_type, conn=c)
+                            origin=origin, existing_snapshot=existing_snapshot, ask_type=ask_type, conn=c,
+                            raised_by=raised_by)
         await c.commit()
     await _confirm(conversation_id, text)
     await bus.append_renderable(_ask_card(
@@ -655,7 +660,7 @@ async def _reraise_conflict(p, current_snapshot: str | None, *, stale_ask_id: st
                     kind=p["kind"], ask_type=p["ask_type"] or "belief", origin="judge-conflict",
                     existing_snapshot=current_snapshot, existing=_snapshot_content(current_snapshot), note=None,
                     meta=json.loads(p["meta"]) if p["meta"] else None,
-                    conversation_id=p["conversation_id"], author=p["author"],
+                    conversation_id=p["conversation_id"], author=p["author"], raised_by=p["raised_by"] or "",
                     text="That changed since I asked — here is the current value to confirm.")
 
 
@@ -854,7 +859,8 @@ async def resolve(ask_id: str, *, approved: bool, conversation_id: str | None = 
     # the ask (`close_act`) only when the agent succeeded, so a failed send can be retried with
     # a second tap. The user's edit replaces the draft — their words, USER_STATED.
     if p["ask_type"] == "act":
-        await _outcome_row(ask_id, p, approved=True)
+        # no outcome row yet: the act may fail and be retried; close_act writes the ONE row
+        # when it is done (a No still writes 'rejected' above)
         await _db.audit("act_approved", p["kind"], f"by {author}; proposed by {p['author']}")
         if details is not None:
             details["proposal"] = Proposal(
@@ -909,7 +915,6 @@ async def resolve(ask_id: str, *, approved: bool, conversation_id: str | None = 
         if unknown:                                            # a typo must not silently keep a record
             await _confirm(p["conversation_id"], f"No such item on this card: {', '.join(unknown)}. The card stays open.")
             return "edit_invalid"
-        await _outcome_row(ask_id, p, approved=True)
         # the empty-namespace promise held at propose time; a record that exists NOW (another
         # batch, a remember in between) is never overwritten judge-free — kept unless the user
         # rewrote it on this card, which is their own explicit word
@@ -940,6 +945,8 @@ async def resolve(ask_id: str, *, approved: bool, conversation_id: str | None = 
             await c.execute("DELETE FROM pending WHERE ask_id=?", (ask_id,))
             await c.commit()
         await _db.audit("hydrate_batch", ask_id, json.dumps({"kept": kept, "dropped": dropped, "held": held}))
+        # after the commit: the answer says what the Yes did (a Yes that dropped all is not "saved")
+        await _outcome_row(ask_id, p, approved=True, extra={"kept": len(kept), "dropped": len(dropped), "held": len(held)})
         await _confirm(p["conversation_id"], f"Saved {len(kept)}." + (f" Dropped {len(dropped)}." if dropped else "")
                        + (f" Already known, kept as is: {', '.join(held)}." if held else ""))
         return "applied"
@@ -1071,27 +1078,18 @@ def _batch_note(items: list) -> str:
     return "\n".join(out)
 
 
-async def _outcome_row(ask_id: str, p, *, approved: bool) -> None:
+async def _outcome_row(ask_id: str, p, *, approved: bool, outcome: str | None = None, extra: dict | None = None) -> None:
     """The eval row `ken eval` reads: who proposed what kind of card, the tap, and how long it
     waited. JSON, so an author name with a space parses. Written only for a REAL outcome —
     never for a stale re-raise or a no_pending tap. `kind` (what the card was about) and `channel`
-    (the credential whose call raised it, e.g. mcp:agent:<name>) let events(answers=true) hand each
-    agent the answers to ITS cards on its next run."""
+    (pending.raised_by: who raised it, set once) let events(answers=true) hand each agent the
+    answers to ITS cards. `outcome` overrides approved/rejected when a No means something else
+    (an identity card: 'not_same'); `extra` carries what the answer did (a batch: kept/dropped/held)."""
     await _db.audit("card_outcome", ask_id, json.dumps({
         "author": p["author"], "ask_type": p["ask_type"] or "belief",
-        "outcome": "approved" if approved else "rejected",
+        "outcome": outcome or ("approved" if approved else "rejected"),
         "age_ms": max(0, now_ms() - (p["created_at"] or now_ms())),
-        "kind": p["kind"], "channel": await _raised_by(p)}))
-
-
-async def _raised_by(p) -> str:
-    """The channel of the inbound action that raised this ask ('' when none is on record)."""
-    action_id = p["action_id"]                       # the column always exists (db.py migration)
-    if not action_id:
-        return ""
-    async with _db.get_db() as c:
-        row = await (await c.execute("SELECT channel FROM inbox WHERE id=?", (action_id,))).fetchone()
-    return str(row["channel"]) if row and row["channel"] else ""
+        "kind": p["kind"], "channel": p["raised_by"] or "", **(extra or {})}))
 
 
 async def withdraw(ask_id: str, *, reason: str) -> None:
@@ -1104,7 +1102,11 @@ async def withdraw(ask_id: str, *, reason: str) -> None:
 
 async def close_act(ask_id: str) -> None:
     """Close an approved act's ask AFTER the agent performed it (the engine calls this). Until
-    then the row stays, so a failed action can be retried with another tap."""
+    then the row stays, so a failed action can be retried with another tap. The card's one
+    outcome row is written here, once the act is really done."""
+    p = await _load_pending(ask_id)
+    if p is not None:
+        await _outcome_row(ask_id, p, approved=True)
     await _delete_pending(ask_id)
 
 
@@ -1262,25 +1264,48 @@ async def _open_ask_for(conversation_id: str, kind: str):
 async def _save_pending(ask_id: str, proposal, *, kind: str, conversation_id: str,
                         author: str, origin: str = "consent-stakes",
                         existing_snapshot: str | None = None, ask_type: str = "belief",
-                        conn=None) -> None:
+                        conn=None, raised_by: str | None = None) -> None:
     """Record a pending ask. Pass `conn` to run inside an existing transaction — the
     re-raise uses this to delete the stale ask and save the fresh one together, so a
-    mid-write crash cannot lose the proposal. When `conn` is given, the caller commits."""
+    mid-write crash cannot lose the proposal. When `conn` is given, the caller commits.
+    `raised_by`: the channel that raised the card. A re-asked card passes its predecessor's;
+    a new card takes the channel of the action raising it (_ACTION), looked up once, here."""
     meta = getattr(proposal, "meta", None) or None
+    if raised_by is None:
+        raised_by = await _channel_of(_ACTION.get(), conn)
     params = (ask_id, conversation_id, kind, proposal.content,
               store.evidence_dump(list(proposal.evidence)), author,
               origin, existing_snapshot, getattr(proposal, "at", None), ask_type,
-              json.dumps(meta) if meta else None, _ACTION.get(), now_ms())
+              json.dumps(meta) if meta else None, _ACTION.get(), raised_by, now_ms())
     sql = ("INSERT OR REPLACE INTO pending "
            "(ask_id, conversation_id, kind, content, evidence, author, origin, "
-           "existing_snapshot, at, ask_type, meta, action_id, created_at) "
-           "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+           "existing_snapshot, at, ask_type, meta, action_id, raised_by, created_at) "
+           "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
     if conn is not None:
         await conn.execute(sql, params)
         return
     async with _db.get_db() as c:
         await c.execute(sql, params)
         await c.commit()
+
+
+async def _channel_of(action_id: str | None, conn=None) -> str:
+    """The channel of one inbound action ('' when there is none on record). Never raises: who
+    raised a card is bookkeeping, and bookkeeping must never block the user's write."""
+    if not action_id:
+        return ""
+    try:
+        sql, args = "SELECT channel FROM inbox WHERE id=? ORDER BY seq DESC LIMIT 1", (action_id,)
+        if conn is not None:
+            row = await (await conn.execute(sql, args)).fetchone()
+        else:
+            async with _db.get_db() as c:
+                row = await (await c.execute(sql, args)).fetchone()
+    except Exception:
+        # logged, never fatal: an audit write here could wait on the caller's open transaction
+        logging.getLogger("ken.gate").warning("raised_by lookup failed for action %s", action_id, exc_info=True)
+        return ""
+    return str(row["channel"]) if row and row["channel"] else ""
 
 
 async def _load_pending(ask_id: str):

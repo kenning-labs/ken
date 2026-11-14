@@ -325,14 +325,19 @@ async def hydrate(items: str | list = "", source: str = "hydrate", provenance: s
 TASK_STATUSES = ("open", "done", "dropped", "all")
 
 
-async def tasks(filter: str = "", now: int | None = None, status: str = "open") -> str:
+async def tasks(filter: str = "", now: int | None = None, status: str = "open", since: str = "") -> str:
     """Open tasks with id, due, age, project, evidence and the lane kip last published; plus how many
     questions wait for the user. `filter`: a lane name, or a substring of the text or the project.
-    `status`: open (default) | done | dropped | all — closed rows carry status, completed, drop_reason."""
+    `status`: open (default) | done | dropped | all — closed rows carry status, completed, drop_reason.
+    `since`: a local ISO date; closed rows only when closed (else created) at or after it."""
     now = now or now_ms()
     status = str(status or "open").strip().lower()
     if status not in TASK_STATUSES:
         return json.dumps({"error": f"status must be one of {', '.join(TASK_STATUSES)}, not {status[:20]!r}"})
+    try:
+        lo = local_ms(since) if str(since or "").strip() else 0
+    except ValueError:
+        return json.dumps({"error": f"since must be a local ISO date, not {str(since)[:20]!r}"})
     deps = await store.deps_map()
     all_open = await store.open_tasks() if status in ("open", "all") else []
     lanes = await _lanes(all_open, now)
@@ -361,7 +366,7 @@ async def tasks(filter: str = "", now: int | None = None, status: str = "open") 
                               created=_iso(t.created_at), **({"status": "open"} if status == "all" else {})))
     if status != "open":
         for t in await store.tasks_by_status(("done", "dropped") if status == "all" else (status,)):
-            if f and not hit(t):
+            if (f and not hit(t)) or (t.completed_at or t.created_at or 0) < lo:
                 continue
             rows.append(_task_row(t, now, deps, status=t.status, completed=_iso(t.completed_at),
                                   created=_iso(t.created_at),
@@ -807,7 +812,8 @@ async def decide(card_id: str, approved: bool, edited: str = "", timeout: float 
 
 TOOL_NAMES = frozenset({"tasks", "get_context", "who_is", "find", "add_task", "complete_task", "discard_task",
                         "reschedule_task", "log_event", "remember", "forget", "tell", "pending", "decide",
-                        "hydrate", "world", "schedule_task", "assign_task", "link_tasks", "events", "chat_history"})
+                        "hydrate", "world", "schedule_task", "assign_task", "link_tasks", "events", "chat_history",
+                        "inbox", "inbox_close"})
 
 
 _AT = "`at` = when this change HAPPENED (local ISO date or datetime), for a late report; a change older than the task's last change is refused as `stale` and nothing changes. Empty = now."
@@ -849,9 +855,10 @@ def build_server():
         "`filter` narrows by lane (overdue, today, this week, someday) or a substring of the text or the project. "
         "Each row has `owner` (null = the user) and, when it waits on other tasks, `depends_on` [{id, text, status}] "
         "and `blocked` (true while one is open). `status`: open (default) | done | dropped | all — closed rows "
-        "carry status, completed, drop_reason."))
-    async def tasks_tool(filter: str = "", status: str = "open") -> str:
-        return await tasks(filter, status=status)
+        "carry status, completed, drop_reason. `since`: a local ISO date; closed rows only from then on "
+        "(status=done since=<two weeks ago> = what got done lately)."))
+    async def tasks_tool(filter: str = "", status: str = "open", since: str = "") -> str:
+        return await tasks(filter, status=status, since=since)
 
     @srv.tool(name="events", description=(
         "What happened in a date window, no word search: live events with their time, newest first. "
@@ -1043,6 +1050,27 @@ def build_server():
         "user where a card came from (the source tag, the ref as a link when it is a URL) before they decide."))
     async def pending_tool() -> str:
         return json.dumps(await pending_cards())
+
+    @srv.tool(name="inbox", description=(
+        "The Dreamer's Inbox: what its nightly read of Ken found. kind ask = needs the user's decision "
+        "(quick = answers it suggests, the first its recommendation); kind look = worth knowing, no decision. "
+        "Each item cites its evidence. `status`: open (default) | closed (with the outcome) | all. Show an open "
+        "item to the user, then record their answer with inbox_close."))
+    async def inbox_tool(status: str = "open") -> str:
+        from . import dream
+        return json.dumps({"items": await dream.items(str(status or "open").lower())}, ensure_ascii=False)
+
+    @srv.tool(name="inbox_close", description=(
+        "Close one Inbox item with the user's answer: a quick answer they picked, or their own words. The "
+        "Dreamer reads it the next night and never asks the same again. Carry out the answer with the other "
+        "tools first (move, close or add tasks), then close the item. The user's token only."))
+    async def inbox_close_tool(item_id: str, outcome: str) -> str:
+        from . import dream
+        if _caller().startswith("mcp:agent"):
+            return json.dumps({"outcome": "forbidden", "text": "the Inbox is the user's: an agent token cannot close it"})
+        ok = await dream.close(item_id, outcome)
+        return json.dumps({"outcome": "closed" if ok else "no_item",
+                           "text": "closed" if ok else f"no open Inbox item {item_id!r}"})
 
     @srv.tool(name="decide", description=(
         "Answer one card on the user's behalf after asking them: approved true/false; `edited` = the "

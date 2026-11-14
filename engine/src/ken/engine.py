@@ -514,6 +514,7 @@ class Engine:
             await self._run_scheduled(now)
             await self._run_reminders(now)
             await self._run_maintainer(now)
+            await self._run_dreamer(now)
 
     async def _run_maintainer(self, now: int) -> None:
         """The daily maintenance pass (stale-task cards); one failure never aborts the tick."""
@@ -522,6 +523,14 @@ class Engine:
             await maintain.run_scheduled(now)
         except Exception as exc:  # noqa: BLE001 — audited, never fatal
             await self._audit("maintain_error", "maintainer", repr(exc))
+
+    async def _run_dreamer(self, now: int) -> None:
+        """Start the Dreamer's night when it is due (it runs in the background); never fatal."""
+        try:
+            from . import dream
+            await dream.run_scheduled(now)
+        except Exception as exc:  # noqa: BLE001 — audited, never fatal
+            await self._audit("dream_error", "dreamer", repr(exc))
 
     async def _run_reminders(self, now: int) -> None:
         """Nudge each open task whose scheduled time has arrived, exactly once. The

@@ -44,6 +44,22 @@ llm:
 #   model: "gpt-6-luna"
 
 
+# The Dreamer (optional, off by default): once a night it reads everything Ken holds with a
+# reasoning model. What needs you goes to the Inbox (MCP `inbox`, at most 6 a night, often none);
+# small fixes to your records come as confirm cards. Its own `llm` block replaces the section above
+# (set every key it needs), so it can run on any OpenAI-compatible host. DeepSeek V4.1 Flash at max effort costs about one
+# cent a night on a filled world. Run it now with `ken dream`.
+# dreamer:
+#   enabled: true
+#   hour: 3                       # the first tick after 03:00 local
+#   llm:
+#     base_url: "https://api.deepseek.com"
+#     api_key: "YOUR_DEEPSEEK_API_KEY"
+#     api_style: "chat"
+#     model: "deepseek-flash"
+#     reasoning_effort: "max"
+
+
 # The MCP server over HTTP (`ken-mcp --http`) — for the Claude app connector, another
 # machine's Claude Code, or an agent of your own. The token that authenticates a call sets
 # how much its writes are trusted: `token` is YOURS (writes may carry your provenance);

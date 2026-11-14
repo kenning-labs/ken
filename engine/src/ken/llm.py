@@ -57,7 +57,7 @@ async def _report_tool(name: str, args: dict) -> None:
 
 class LLM(Protocol):
     async def complete(self, system: str, messages: list[dict], *,
-                       tools: list | None = None) -> str: ...
+                       tools: list | None = None, max_hops: int = ...) -> str: ...
 
 
 # ── the tool executor ────────────────────────────────────────────────────────
@@ -91,34 +91,39 @@ class OpenAILLM:
         self._api_style = api_style
 
     async def complete(self, system: str, messages: list[dict], *,
-                       tools: list | None = None) -> str:
+                       tools: list | None = None, max_hops: int = _MAX_TOOL_HOPS) -> str:
         if not tools:
             content, _ = await self._chat([{"role": "system", "content": system}, *messages], None)
             return content
         if self._api_style == "chat":
-            return await self._chat_loop(system, messages, tools)
-        return await self._respond(system, messages, tools)
+            return await self._chat_loop(system, messages, tools, max_hops=max_hops)
+        return await self._respond(system, messages, tools, max_hops=max_hops)
 
     async def _chat_loop(self, system: str, messages: list[dict], tools: list, *,
                          max_hops: int = _MAX_TOOL_HOPS) -> str:
         """Tool loop on /v1/chat/completions. The whole transcript is resent each hop:
         the assistant's tool_calls message, then one `tool` message per call (several calls
         per hop are allowed, each gets its message in order). At the hop cap every call is
-        already answered, so one more tools-off turn forces the final text. Differences from
-        `_respond`: no reasoning effort is sent (compatible hosts reject the field), and the
-        model may call several tools in one hop."""
+        already answered, so one more tools-off turn forces the final text. The model may call
+        several tools in one hop. An effort given to THIS client goes as `reasoning_effort`
+        (DeepSeek takes it; many compatible hosts reject it, so app.py never passes the shared
+        `llm.reasoning_effort` to a chat-style client), and a thinking model's `reasoning_content`
+        goes back with its tool calls, as DeepSeek requires."""
         specs = {t.name: t for t in tools}
+        extra = {"reasoning_effort": self._effort} if self._effort else {}
         schemas = [{"type": "function", "function": {"name": t.name, "description": t.description,
                                                      "parameters": t.parameters}} for t in tools]
         convo = [{"role": "system", "content": system}, *messages]
         for _ in range(max_hops):
             resp = await self._client.chat.completions.create(
-                model=self._model, messages=convo, tools=schemas)
+                model=self._model, messages=convo, tools=schemas, **extra)
             msg = resp.choices[0].message
             calls = msg.tool_calls or []
             if not calls:
                 return (msg.content or "").strip()
-            convo.append({"role": "assistant", "content": msg.content or "", "tool_calls": [
+            thought = getattr(msg, "reasoning_content", None)
+            convo.append({"role": "assistant", "content": msg.content or "",
+                          **({"reasoning_content": thought} if thought else {}), "tool_calls": [
                 {"id": tc.id, "type": "function",
                  "function": {"name": tc.function.name, "arguments": tc.function.arguments or "{}"}}
                 for tc in calls]})
@@ -129,7 +134,7 @@ class OpenAILLM:
                 convo.append({"role": "tool", "tool_call_id": tc.id, "content": out})
         # hop cap hit with every call already answered: force a tools-off final answer
         convo.append({"role": "user", "content": "Answer now with what you have; do not call more tools."})
-        resp = await self._client.chat.completions.create(model=self._model, messages=convo)
+        resp = await self._client.chat.completions.create(model=self._model, messages=convo, **extra)
         return (resp.choices[0].message.content or "").strip()
 
     async def _chat(self, convo: list[dict], schemas: list | None):
@@ -217,7 +222,7 @@ class ClaudeCodeLLM:
         self._cwd = os.path.expanduser("~/.ken")      # no project settings or CLAUDE.md leak in
 
     async def complete(self, system: str, messages: list[dict], *,
-                       tools: list | None = None) -> str:
+                       tools: list | None = None, max_hops: int = _MAX_TOOL_HOPS) -> str:
         prompt = _flatten(messages)
         if not tools:
             out = await self._run(prompt, system=system, persist=False)
@@ -229,7 +234,7 @@ class ClaudeCodeLLM:
                 "need, answer {\"final\": <your reply>}.\nTools:\n" + manifest)
         out = await self._run(prompt, system=sys2, schema=_CC_TURN, persist=True)
         sid = out.get("session_id")
-        for _ in range(_MAX_TOOL_HOPS):
+        for _ in range(max_hops):
             turn = out.get("structured_output") or _load_args(str(out.get("result") or ""))
             call = turn.get("call") if isinstance(turn, dict) else None
             if not call or not call.get("name"):

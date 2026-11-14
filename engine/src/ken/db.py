@@ -205,6 +205,21 @@ CREATE TABLE IF NOT EXISTS agent_log (
   detail  TEXT                    -- the finding, the error, a short note
 );
 CREATE INDEX IF NOT EXISTS idx_agent_log_at ON agent_log(at);
+
+-- the Dreamer's Inbox: what one night found that needs the user (ask) or is worth a look
+-- (look). The whole item is `body` JSON; `outcome` is how it closed (the user's quick answer,
+-- their own words, or "expired" after a week), which the next night reads so it never asks twice.
+CREATE TABLE IF NOT EXISTS dream_items (
+  id         TEXT PRIMARY KEY,
+  night      TEXT NOT NULL,            -- local date of the run, YYYY-MM-DD
+  kind       TEXT NOT NULL,            -- ask | look
+  body       TEXT NOT NULL,            -- {title, preview, body[], evidence[], quick[], why_now}
+  status     TEXT NOT NULL DEFAULT 'open',   -- open | closed
+  outcome    TEXT,
+  created_at INTEGER NOT NULL,
+  closed_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_dream_items_status ON dream_items(status, created_at);
 """
 
 

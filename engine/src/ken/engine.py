@@ -9,6 +9,7 @@ drive from a test. The always-on daemon is a thin wrapper over `tick()`.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import datetime
@@ -91,6 +92,8 @@ class Engine:
         self._seeded = False
         self.discovery_skips: list[tuple[str, str]] = []   # drop-ins that failed to load
         self._audited_skips: set = set()   # (src, err) already trailed — dedup across reloads
+        self._chatting: set[str] = set()   # Inbox items with a Dreamer turn running
+        self._background: set = set()      # those turns' tasks (a reference, so none is collected mid-run)
 
     def register_agent(self, a: Agent, *, assistant: bool = False) -> None:
         # one session, one owning agent — a silent overwrite would misroute every
@@ -331,6 +334,20 @@ class Engine:
             tool, args = str(spec.get("tool", "")), dict(spec.get("args") or {})
         except (ValueError, TypeError, AttributeError):
             tool, args = "", {}
+        if tool == "inbox_chat":                       # one Dreamer turn on one Inbox item
+            if str(action.channel or "").startswith("mcp:agent"):   # the Inbox is the user's
+                await self._reply(cid, action.id, "the Inbox is the user's", outcome="forbidden")
+                return
+            item_id = str(args.get("item_id") or "")
+            if item_id in self._chatting:                 # one turn per item at a time
+                await self._reply(cid, action.id, "The Dreamer is still answering your last message.", outcome="busy")
+                return
+            # a reasoning turn takes a minute or two: it runs beside the loop, which keeps answering
+            self._chatting.add(item_id)
+            t = asyncio.create_task(self._inbox_chat(action, item_id, str(args.get("text") or "")))
+            self._background.add(t)
+            t.add_done_callback(self._background.discard)
+            return
         agent = self.assistant
         if agent is None or tool not in self._TOOLS:
             await self._audit("tool_unknown", action.id, tool or (action.text or "")[:80])
@@ -359,8 +376,20 @@ class Engine:
         await store.bump(f"run:{agent_name(agent)}", now_ms())
         await self._reply(cid, action.id, r.text, outcome=r.outcome, tool=tool, via=source)
 
+    async def _inbox_chat(self, action, item_id: str, text: str) -> None:
+        from . import dream
+        try:
+            r = await dream.chat(item_id, text, judge=self.judge, action_id=action.id)
+            await self._reply(action.conversation_id, action.id, r["reply"], outcome=r["outcome"], tool="inbox_chat",
+                              extra={"actions": r["actions"], "closed": r["closed"]})
+        except Exception as exc:  # noqa: BLE001 — a failed turn answers, never leaves the client waiting
+            await self._audit("tool_error", action.id, f"inbox_chat: {exc!r}")
+            await self._reply(action.conversation_id, action.id, f"The Dreamer could not answer: {exc}", outcome="error")
+        finally:
+            self._chatting.discard(item_id)
+
     async def _reply(self, cid: str, action_id: str, text: str, *, outcome: str,
-                     tool: str = "", via: str = "", silent: bool = False) -> None:
+                     tool: str = "", via: str = "", silent: bool = False, extra: dict | None = None) -> None:
         """The structured answer to one inbound action: text for a human, `outcome` and
         `result` for code, and the cards this action raised. Posted as kip. `silent` draws
         nothing in a stream and enters no model history (an empty text does the latter)."""
@@ -369,6 +398,8 @@ class Engine:
                 "result": [{"tool": tool, "outcome": outcome, "text": text}] if tool else []}
         if via:
             body["via"] = via
+        if extra:
+            body.update(extra)
         if silent:
             body["silent"] = True
         await bus.append_renderable(Renderable(

@@ -786,6 +786,22 @@ async def events(since: str = "", until: str = "", now: int | None = None, answe
     return json.dumps(out)
 
 
+async def inbox_chat(item_id: str, text: str, timeout: float = 150.0) -> str:
+    """One user turn on an Inbox item, answered by the Dreamer in the engine (it holds the model and the
+    write path). The thread lives on the item, so every client shows the same talk."""
+    from . import dream
+    if _caller().startswith("mcp:agent"):
+        return json.dumps({"outcome": "forbidden", "text": "the Inbox is the user's: an agent token cannot talk in it"})
+    item = await dream.get(item_id)
+    if item is None or item["status"] != "open":
+        return json.dumps({"outcome": "no_item", "text": f"no open item {item_id!r} in the Inbox"})
+    body = await _post(ActionKind.TOOL, json.dumps({"tool": "inbox_chat", "args": {"item_id": item_id, "text": text}}),
+                       meta={"source": "Dreamer Inbox", "provenance": "user"}, timeout=timeout)
+    # this turn's own actions and cards come in the engine's answer to THIS action, never from the thread
+    return json.dumps({"reply": body.get("text"), "outcome": body.get("outcome"), "actions": body.get("actions") or [],
+                       "cards": body.get("cards") or [], "item": await dream.get(item_id)}, ensure_ascii=False)
+
+
 _RECORD_CARDS = ("SELECT ask_id, evidence FROM pending WHERE kind=?1 OR kind LIKE '%:' || ?1 "
                  "OR kind LIKE 'identity:' || ?1 || ':%'")
 
@@ -876,7 +892,7 @@ async def decide(card_id: str, approved: bool, edited: str = "", timeout: float 
 TOOL_NAMES = frozenset({"tasks", "get_context", "who_is", "find", "add_task", "complete_task", "discard_task",
                         "reschedule_task", "log_event", "remember", "forget", "tell", "pending", "decide",
                         "hydrate", "world", "schedule_task", "assign_task", "link_tasks", "events", "chat_history",
-                        "inbox", "inbox_close", "inbox_apply"})
+                        "inbox", "inbox_close", "inbox_apply", "inbox_chat"})
 
 
 _AT = "`at` = when this change HAPPENED (local ISO date or datetime), for a late report; a change older than the task's last change is refused as `stale` and nothing changes. Empty = now."
@@ -1122,6 +1138,14 @@ def build_server():
     async def inbox_tool(status: str = "open") -> str:
         from . import dream
         return json.dumps({"items": await dream.items(str(status or "open").lower())}, ensure_ascii=False)
+
+    @srv.tool(name="inbox_chat", description=(
+        "Talk with the Dreamer about one open Inbox item: a quick answer the user tapped, or their own words. "
+        "The Dreamer answers and carries out what the user asks (move, close, drop, add or book tasks), then "
+        "closes the item when the talk reaches a decision. Returns the reply, whether the item closed, what was "
+        "done, and the item with its whole thread. The user's token only."))
+    async def inbox_chat_tool(item_id: str, text: str) -> str:
+        return await inbox_chat(item_id, text)
 
     @srv.tool(name="inbox_apply", description=(
         "Apply one proposed fix from the Inbox (kind tidy): its `add` is appended to the record's note as it "

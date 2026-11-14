@@ -29,7 +29,7 @@ from .conversation import bus
 from .llm import build_llm, resolve_model
 from .memory import store
 from .tools.base import Tool
-from .util import new_id, norm, now_ms, slug
+from .util import new_id, norm, now_ms, slug, title_of
 
 CAP = 6                  # asks + looks a night, at most
 EXPIRE_DAYS = 7          # an item nobody answered closes itself after a week
@@ -134,8 +134,12 @@ async def _history(now: int) -> list[dict]:
         cur = await c.execute("SELECT night, kind, body, status, outcome FROM dream_items WHERE created_at>=? "
                               "ORDER BY created_at", (now - HISTORY_DAYS * _DAY,))
         rows = await cur.fetchall()
-    return [{"night": r["night"], "kind": r["kind"], "title": json.loads(r["body"]).get("title"),
-             "status": r["status"], **({"outcome": r["outcome"]} if r["outcome"] else {})} for r in rows]
+    out = []
+    for r in rows:
+        b = json.loads(r["body"])
+        out.append({"night": r["night"], "kind": r["kind"], "title": b.get("title"), **({"add": b["add"]} if b.get("add") else {}),
+                    "status": r["status"], **({"outcome": r["outcome"]} if r["outcome"] else {})})
+    return out
 
 
 def _parse(text: str) -> dict:
@@ -191,10 +195,11 @@ async def _source_ok(src, add: str) -> bool:
     return False
 
 
-async def _tidy(group: list[dict], open_records: set) -> tuple[str, dict | None]:
+async def _tidy(group: list[dict], open_records: set, refused: dict) -> tuple[str, dict | None]:
     """Every tidy item for ONE record -> one proposed fix for the Inbox (or why not). It holds only
-    what to ADD; inbox_apply appends it to the note as it is when the user presses Apply, so the
-    model's words never replace the user's and a note edited since the night is not lost."""
+    what to ADD, sentence by sentence; inbox_apply appends the ones the note still lacks when the
+    user presses Apply, so the model's words never replace the user's and a later edit is kept.
+    A fact the user skipped before, or a link to a record Ken does not hold, is never proposed."""
     t = group[0]
     ns = _KINDS.get(str(t.get("kind") or "").lower())
     name = str(t.get("name") or "").strip()
@@ -205,36 +210,55 @@ async def _tidy(group: list[dict], open_records: set) -> tuple[str, dict | None]
         return f"no {t.get('kind')} {name!r}", None
     if had.kind in open_records:
         return "a fix for it already waits in the Inbox", None
-    adds, links, why, notes = [], [], [], []
+    adds, links, why, sources, notes = [], [], [], [], []
     for t in group:
         add = " ".join(str(t.get("add") or "").split())
         if add and norm(add) in norm(" ".join([had.content, *adds])):
             add = ""                                     # the note says it already
+        if add and norm(add) in refused.get(had.kind, set()):
+            notes.append("a fact you skipped before was left out")
+            add = ""
         if add and not await _source_ok(t.get("source"), add):
             notes.append("a fact with no event or chat message behind it was left out")
             add = ""
         if add:
             adds.append(add)
-        if isinstance(t.get("link"), dict):
-            links.append(t["link"])
-        if add or isinstance(t.get("link"), dict):
+            sources.append(t["source"])
+        lk = t.get("link") if isinstance(t.get("link"), dict) else None
+        if lk and not await _exists(lk):
+            notes.append(f"a link to {lk.get('name')!r}, which Ken does not hold, was left out")
+            lk = None
+        if lk:
+            links.append(lk)
+        if add or lk:
             why.append(" ".join(str(t.get("why") or "").split())[:300])
     tail = f" ({'; '.join(notes)})" if notes else ""
     if not adds and not links:
         return "nothing to add" + tail, None
-    title = f"Add to {_title_of(had)}" if adds else f"Link {_title_of(had)}"
-    item = {"title": title, "preview": (adds[0] if adds else _link_line(_title_of(had), links[0]))[:160],
-            "record": {"kind": str(group[0]["kind"]).lower(), "name": _title_of(had), "id": had.kind},
-            "add": " ".join(adds), "links": links, "why": " ".join(w for w in why if w)}
+    title = title_of(had.kind)
+    item = {"title": f"Add to {title}" if adds else f"Link {title}",
+            "preview": (adds[0] if adds else f"{title} is {links[0].get('rel')} {links[0].get('name')}")[:160],
+            "record": {"kind": str(group[0]["kind"]).lower(), "name": title, "id": had.kind},
+            "add": " ".join(adds), "adds": adds, "links": links, "sources": sources, "why": " ".join(w for w in why if w)}
     return "proposed" + tail, item
 
 
-def _title_of(e) -> str:
-    return e.subject or e.kind.split(".", 1)[-1].replace("_", " ")
+async def _exists(lk: dict) -> bool:
+    ns = _KINDS.get(str(lk.get("kind") or "").lower())
+    kind = f"{ns}.{slug(str(lk.get('name') or ''))}" if ns else ""
+    return bool(ns) and any(e.kind == kind for e in await store.get_structured(ns + "."))
 
 
-def _link_line(name: str, lk: dict) -> str:
-    return f"{name} is {lk.get('rel', 'linked to')} {lk.get('name', '')}".strip()
+async def _refused(now: int) -> dict:
+    """record kind -> the facts the user skipped (or let expire) in the history window, normalized."""
+    out: dict = {}
+    async with _db.get_db() as c:
+        rows = await (await c.execute("SELECT body FROM dream_items WHERE kind='tidy' AND status='closed' "
+                                      "AND outcome!='applied' AND created_at>=?", (now - HISTORY_DAYS * _DAY,))).fetchall()
+    for r in rows:
+        b = json.loads(r["body"])
+        out.setdefault(b.get("record", {}).get("id"), set()).update(norm(x) for x in b.get("adds") or [b.get("add") or ""])
+    return out
 
 
 async def run_once(now: int | None = None, llm=None) -> dict:
@@ -248,10 +272,12 @@ async def run_once(now: int | None = None, llm=None) -> dict:
     night = datetime.fromtimestamp(now / 1000).strftime("%Y-%m-%d")  # noqa: DTZ006 — local, by design
     # the Dreamer never keeps a card in the shared queue ("Ken wants to check" is for writes from
     # outside); cards an older version raised go back, and tonight proposes them in the Inbox
-    async with _db.get_db() as c:
-        old = [r["ask_id"] for r in await (await c.execute("SELECT ask_id FROM pending WHERE author='Dreamer'")).fetchall()]
-    for ask_id in old:
-        await gate.withdraw(ask_id, reason="the Dreamer proposes fixes in the Inbox, not as cards")
+    if not await store.get_meta("dream:cards_withdrawn"):          # once: the cards the first canary raised
+        async with _db.get_db() as c:
+            old = [r["ask_id"] for r in await (await c.execute("SELECT ask_id FROM pending WHERE author='Dreamer'")).fetchall()]
+        for ask_id in old:
+            await gate.withdraw(ask_id, reason="the Dreamer proposes fixes in the Inbox, not as cards")
+        await store.set_meta("dream:cards_withdrawn", "1")
     async with _db.get_db() as c:                     # a week unanswered: it closes itself
         await c.execute("UPDATE dream_items SET status='closed', outcome='expired', closed_at=? "
                         "WHERE status='open' AND created_at<?", (now, now - EXPIRE_DAYS * _DAY))
@@ -294,10 +320,11 @@ async def run_once(now: int | None = None, llm=None) -> dict:
             groups.setdefault((str(t.get("kind")).lower(), slug(str(t.get("name") or ""))), []).append(t)
     tidy, fixes = [], []
     open_records = {json.loads(i["body"]).get("record", {}).get("id") for i in await _open("tidy")}
+    refused = await _refused(now)
     for group in groups.values():
         name = group[0].get("name")
         try:
-            said, item = await _tidy(group, open_records)
+            said, item = await _tidy(group, open_records, refused)
         except Exception as exc:  # noqa: BLE001 — one bad tidy never loses the night
             said, item = f"failed {exc!r}", None
         tidy.append(f"{name}: {said}")
@@ -349,7 +376,8 @@ async def _open(kind: str) -> list:
 async def get(item_id: str) -> dict | None:
     async with _db.get_db() as c:
         r = await (await c.execute("SELECT * FROM dream_items WHERE id=?", (str(item_id),))).fetchone()
-    return None if r is None else {"id": r["id"], "kind": r["kind"], "status": r["status"], **json.loads(r["body"])}
+    return None if r is None else {"id": r["id"], "night": r["night"], "kind": r["kind"], "status": r["status"],
+                                   **json.loads(r["body"])}
 
 
 async def items(status: str = "open") -> list[dict]:

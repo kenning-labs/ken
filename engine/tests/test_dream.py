@@ -217,16 +217,81 @@ async def test_an_agent_token_cannot_close_the_inbox(tmp_path):
     assert (await dream.items("closed"))[0]["outcome"] == "Leave it"
 
 
-async def test_a_fact_from_an_unrelated_event_is_refused_but_a_link_waits_for_apply(tmp_path):
+async def _person(name, note="A colleague."):
+    await store.upsert_structured(StructuredEntry(id=f"people.{name}", kind=f"people.{name}", subject=name, content=note,
+                                                  provenance=Provenance.USER_STATED), change_note="test")
+
+
+async def test_unproven_facts_and_links_to_nobody_are_refused_a_real_link_applies(tmp_path):
+    from ken.engine import Engine
     _, when = await _setup(tmp_path)
+    await _person("maria")
     night = {"tidy": [
         {"kind": "project", "name": "emigration", "add": "", "link": {"kind": "person", "name": "x", "rel": "member"}},
         {"kind": "project", "name": "emigration", "add": "Sashko sold the car in October.",   # the 17:45 event is about tickets
-         "source": {"event": when}}]}
+         "source": {"event": when}},
+        {"kind": "person", "name": "maria", "add": "", "link": {"kind": "project", "name": "emigration", "rel": "member"}}]}
     done = await dream.run_once(llm=FakeLLM(night))
-    assert done["tidy"] == ["emigration: proposed (a fact with no event or chat message behind it was left out)"]
+    assert done["tidy"][0].startswith("emigration: nothing to add (a link to 'x', which Ken does not hold")
+    assert done["tidy"][1] == "maria: proposed"
     (fix,) = await dream.items()
-    assert (fix["title"], fix["add"], fix["links"]) == ("Link emigration", "", [{"kind": "person", "name": "x", "rel": "member"}])
+    assert (fix["title"], fix["add"]) == ("Link maria", "")
+    eng = Engine(); eng.register_agent(Assistant(llm=None), assistant=True)
+    out = await _pumped(eng, mcp_server.inbox_apply(fix["id"]))
+    assert out["outcome"] == "applied", out
+    assert {(lk["src"], lk["dst"]) for lk in await store.links_of(["people.maria"])} == {("people.maria", "projects.emigration")}
+
+
+async def test_apply_finds_the_record_by_its_key_and_adds_only_missing_sentences(tmp_path):
+    from ken.engine import Engine
+    _, when = await _setup(tmp_path)
+    # the record's display subject differs from its key: Apply must still write projects.emigration
+    await store.upsert_structured(StructuredEntry(id="projects.emigration", kind="projects.emigration", subject="Emigration to Portugal",
+                                                  content="Moving on a D8 visa.", provenance=Provenance.USER_STATED), change_note="test")
+    await dream.run_once(llm=FakeLLM({"tidy": [
+        {"kind": "project", "name": "emigration", "add": "The consulate requires a round-trip ticket.", "source": {"event": when}},
+        {"kind": "project", "name": "emigration", "add": "The consulate answered on the 13th.", "source": {"event": when}}]}))
+    (fix,) = await dream.items()
+    await store.upsert_structured(StructuredEntry(id="projects.emigration", kind="projects.emigration", subject="Emigration to Portugal",
+                                                  content="Moving on a D8 visa. The consulate answered on the 13th.",
+                                                  provenance=Provenance.USER_STATED), change_note="the user typed one fact")
+    eng = Engine(); eng.register_agent(Assistant(llm=None), assistant=True)
+    assert (await _pumped(eng, mcp_server.inbox_apply(fix["id"])))["outcome"] == "applied"
+    kinds = [e.kind for e in await store.get_structured("projects.")]
+    assert kinds == ["projects.emigration"]                          # no copy under another key
+    rec = (await store.get_structured("projects."))[0]
+    assert rec.content == "Moving on a D8 visa. The consulate answered on the 13th. The consulate requires a round-trip ticket."
+    assert rec.evidence and rec.evidence[-1].ref.startswith("dreamer:")   # the fix keeps where it came from
+
+
+async def test_a_skipped_fact_is_not_proposed_again(tmp_path):
+    _, when = await _setup(tmp_path)
+    night = {"tidy": [{"kind": "project", "name": "emigration", "add": "The consulate requires a round-trip ticket.",
+                       "source": {"event": when}}]}
+    await dream.run_once(llm=FakeLLM(night))
+    (fix,) = await dream.items()
+    await dream.close(fix["id"], "skipped")
+    llm = FakeLLM(night)
+    again = await dream.run_once(llm=llm)
+    assert again["tidy"] == ["emigration: nothing to add (a fact you skipped before was left out)"]
+    assert "The consulate requires a round-trip ticket." in llm.prompts[0]   # the model sees which fact was refused
+
+
+async def test_a_card_an_earlier_apply_left_is_approved_not_a_block(tmp_path):
+    from ken.agents.base import Proposal
+    from ken.consent import gate
+    from ken.contracts import Evidence
+    from ken.engine import Engine
+    _, when = await _setup(tmp_path)
+    await dream.run_once(llm=FakeLLM({"tidy": [{"kind": "project", "name": "emigration",
+                                               "add": "The consulate requires a round-trip ticket.", "source": {"event": when}}]}))
+    (fix,) = await dream.items()
+    # Ken was busy: the first Apply's write landed later as a card, with the Dreamer as its source
+    await gate.apply(Proposal(intent="structured:projects.emigration",
+                              content="Moving to Portugal on a D8 visa. The consulate requires a round-trip ticket.",
+                              evidence=[Evidence(ref="dreamer:x", source="Dreamer")]), conversation_id=bus.MAIN, author="kip")
+    eng = Engine(); eng.register_agent(Assistant(llm=None), assistant=True)
+    assert (await _pumped(eng, mcp_server.inbox_apply(fix["id"])))["outcome"] == "applied"
     assert await mcp_server.pending_cards() == []
 
 

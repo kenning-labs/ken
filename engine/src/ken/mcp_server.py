@@ -768,15 +768,16 @@ async def events(since: str = "", until: str = "", now: int | None = None, answe
     if answers:
         mine = _caller() if _caller().startswith("mcp:agent") else None
         rows, more = await store.card_answers(lo, hi, channel=mine)
-        # yes / no, or not_same: on a "same record?" card, No means "save it as new" (a new card follows)
-        word = {"approved": "yes", "rejected": "no", "not_same": "not_same"}
+        # yes / no; not_same: on a "same record?" card, No means "save it as new" (a new card follows);
+        # failed: the user said yes to an action, but nothing could perform it
+        word = {"approved": "yes", "rejected": "no", "not_same": "not_same", "failed": "failed"}
         out["answers"] = [{"card_id": a["card_id"], "about": a["kind"], "type": a["ask_type"] or "belief",
                            "answer": word.get(a["outcome"], a["outcome"]), "when": _iso(a["at"]),
                            **{k: a[k] for k in ("kept", "dropped", "held") if k in a},
                            **({} if mine else {"raised_by": a["channel"] or "unknown"})}
                           for a in rows]
         if more:
-            out["more"] = True                           # the window held more answers: ask again with a later since
+            out["more"] = True        # newest first, so the OLDEST were cut: ask again with until = the oldest `when`
     return json.dumps(out)
 
 
@@ -855,9 +856,12 @@ def build_server():
     @srv.tool(name="events", description=(
         "What happened in a date window, no word search: live events with their time, newest first. "
         "`since` / `until` = local ISO dates or datetimes; default the last 30 days. `answers`: true adds the "
-        "user's yes/no answers to cards in the window (card_id, about, answer, when). An agent token sees only the "
-        "cards its own writes raised: call events(since=<your last run>, answers=true) at the start of a run to "
-        "learn what the user decided, instead of guessing from what disappeared."))
+        "user's answers to cards in the window, newest first (card_id, about, answer, when). An agent token sees "
+        "only the cards its own writes raised: call events(since=<your last run>, answers=true) at the start of a run "
+        "to learn what the user decided, instead of guessing from what disappeared. `answer`: yes | no | not_same "
+        "(No on a 'same record?' card: Ken already asks again to save it as new, so do not propose it again) | failed "
+        "(the user said yes to an action but it could not be done). A batch answer adds kept / dropped / held counts. "
+        "`more`: true when older answers were cut: ask again with `until` = the oldest `when` you got."))
     async def events_tool(since: str = "", until: str = "", answers: bool = False) -> str:
         return await events(since, until, answers=answers)
 

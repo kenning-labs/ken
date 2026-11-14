@@ -489,7 +489,7 @@ async def _resolve_identity(ask_id: str, p, *, approved: bool, edit: str, author
 async def _swap_ask(old_ask_id: str, *, content: str, evidence: list, kind: str, ask_type: str, origin: str,
                     existing_snapshot: str | None, existing: str | None, note: str | None,
                     conversation_id: str, author: str, text: str, meta: dict | None = None,
-                    subject: str | None = None, raised_by: str = "") -> None:
+                    raised_by: str, subject: str | None = None) -> None:
     """Replace one open ask with the next in ONE transaction, then post the message and
     the card — a crash between the two leaves either ask, never neither. The next ask keeps
     the old one's `raised_by`: the user's tap made it, but it answers the same caller's proposal."""
@@ -1100,13 +1100,14 @@ async def withdraw(ask_id: str, *, reason: str) -> None:
     await _delete_pending(ask_id)
 
 
-async def close_act(ask_id: str) -> None:
+async def close_act(ask_id: str, *, done: bool = True) -> None:
     """Close an approved act's ask AFTER the agent performed it (the engine calls this). Until
     then the row stays, so a failed action can be retried with another tap. The card's one
-    outcome row is written here, once the act is really done."""
+    outcome row is written here: 'approved' once the act is really done; 'failed' when it is
+    closed without being done (no agent can perform it), so nobody reads that as a yes."""
     p = await _load_pending(ask_id)
     if p is not None:
-        await _outcome_row(ask_id, p, approved=True)
+        await _outcome_row(ask_id, p, approved=done, outcome=None if done else "failed")
     await _delete_pending(ask_id)
 
 
@@ -1272,7 +1273,7 @@ async def _save_pending(ask_id: str, proposal, *, kind: str, conversation_id: st
     a new card takes the channel of the action raising it (_ACTION), looked up once, here."""
     meta = getattr(proposal, "meta", None) or None
     if raised_by is None:
-        raised_by = await _channel_of(_ACTION.get(), conn)
+        raised_by = await _channel_of(_ACTION.get())
     params = (ask_id, conversation_id, kind, proposal.content,
               store.evidence_dump(list(proposal.evidence)), author,
               origin, existing_snapshot, getattr(proposal, "at", None), ask_type,
@@ -1289,20 +1290,17 @@ async def _save_pending(ask_id: str, proposal, *, kind: str, conversation_id: st
         await c.commit()
 
 
-async def _channel_of(action_id: str | None, conn=None) -> str:
+async def _channel_of(action_id: str | None) -> str:
     """The channel of one inbound action ('' when there is none on record). Never raises: who
     raised a card is bookkeeping, and bookkeeping must never block the user's write."""
     if not action_id:
         return ""
     try:
-        sql, args = "SELECT channel FROM inbox WHERE id=? ORDER BY seq DESC LIMIT 1", (action_id,)
-        if conn is not None:
-            row = await (await conn.execute(sql, args)).fetchone()
-        else:
-            async with _db.get_db() as c:
-                row = await (await c.execute(sql, args)).fetchone()
+        async with _db.get_db() as c:
+            row = await (await c.execute("SELECT channel FROM inbox WHERE id=? ORDER BY seq DESC LIMIT 1",
+                                         (action_id,))).fetchone()
     except Exception:
-        # logged, never fatal: an audit write here could wait on the caller's open transaction
+        # logged, never fatal: who raised a card must never block the write that raises it
         logging.getLogger("ken.gate").warning("raised_by lookup failed for action %s", action_id, exc_info=True)
         return ""
     return str(row["channel"]) if row and row["channel"] else ""

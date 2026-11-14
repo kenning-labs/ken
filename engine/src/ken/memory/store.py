@@ -472,10 +472,11 @@ async def card_answers(lo: int, hi: int, *, channel: str | None = None, limit: i
     """The user's answers to cards in [lo, hi], newest first, from the gate's card_outcome rows:
     {card_id, kind, ask_type, outcome (approved | rejected | not_same), channel, at, kept?, dropped?,
     held?}. With `channel`, only the cards that channel raised (an agent token sees its own cards,
-    never another's), filtered in SQL. One answer per card: the newest row wins (a failed apply
-    retried by a second tap leaves two rows). Returns (answers, more): `more` when the limit cut it."""
+    never another's), filtered in SQL (a pre-JSON row is skipped, never an error). One answer per
+    card: the newest row IN THE WINDOW wins (a failed apply retried by a second tap leaves two rows).
+    Returns (answers, more): `more` when the limit cut the OLDEST answers (page with an earlier until)."""
     sql = ("SELECT ref, reason, at FROM audit WHERE kind='card_outcome' AND at BETWEEN ? AND ?"
-           + (" AND json_extract(reason, '$.channel') = ?" if channel is not None else "")
+           + (" AND json_valid(reason) AND json_extract(reason, '$.channel') = ?" if channel is not None else "")
            + " ORDER BY at DESC, rowid DESC")
     args = (lo, hi) + ((channel,) if channel is not None else ())
     out, seen, more = [], set(), False

@@ -367,6 +367,10 @@ async def init_db() -> None:
         await _add_column(conn, "inbox", "meta", "TEXT")          # json: task_id / provenance / source
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_inbox_id ON inbox(id)")            # raise-time channel lookup
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_kind_at ON audit(kind, at)")  # card answers in a window
+        # cards open across the upgrade: their raiser from the action that raised them (best effort,
+        # once; a card re-tagged by a repeat before the upgrade keeps that later caller)
+        await conn.execute("UPDATE pending SET raised_by=(SELECT channel FROM inbox WHERE inbox.id=pending.action_id "
+                           "ORDER BY seq LIMIT 1) WHERE raised_by IS NULL AND action_id IS NOT NULL")
         await _add_column(conn, "events", "until", "INTEGER")     # when it stops mattering: hides, never deletes
         await _add_column(conn, "structured", "url", "TEXT")      # an asset's link (a sheet, a repo, a doc)
         # the connector layer is gone (agents fetch through their own tools); drop its

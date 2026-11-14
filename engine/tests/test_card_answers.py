@@ -160,3 +160,36 @@ async def test_one_answer_per_card_and_more_when_cut(tmp_path):
     assert not more
     rows, more = await store.card_answers(0, 10_000, channel="mcp:agent:x", limit=2)
     assert [r["card_id"] for r in rows] == ["c3", "c2"] and more
+
+
+async def test_an_old_non_json_row_is_skipped_never_an_error(tmp_path):
+    await _setup(tmp_path)
+    async with db.get_db() as c:
+        await c.execute("INSERT INTO audit (id, kind, ref, reason, at) VALUES ('old', 'card_outcome', 'c0', 'approved', ?)",
+                        (now_ms(),))
+        await c.commit()
+    assert (await _events_as("mcp:agent:x", answers=True))["answers"] == []
+
+
+async def test_an_act_nobody_can_perform_is_answered_failed_not_yes(tmp_path):
+    await _setup(tmp_path)
+    await _inbox("act-s", "mcp:agent:slack")
+    await gate.apply(Proposal(intent="act:reply", content="On it.", provenance=Provenance.USER_INSTRUCTED, meta={"channel": "c"}),
+                     conversation_id=bus.MAIN, author="slack", action_id="act-s")
+    card = await _only_ask()
+    assert await gate.resolve(card, approved=True, conversation_id=bus.MAIN) == "act"
+    await gate.close_act(card, done=False)
+    assert [a["answer"] for a in (await _events_as("mcp:agent:slack", answers=True))["answers"]] == ["failed"]
+
+
+async def test_a_card_open_across_the_upgrade_gets_its_raiser(tmp_path):
+    await _setup(tmp_path)
+    await _inbox("act-old", "mcp:agent:a")
+    async with db.get_db() as c:                       # a card saved by the old code: no raised_by
+        await c.execute("INSERT INTO pending (ask_id, conversation_id, kind, content, author, ask_type, action_id, created_at) "
+                        "VALUES ('k1', ?, 'people.zoe', 'x', 'kip', 'belief', 'act-old', ?)", (bus.MAIN, now_ms()))
+        await c.commit()
+    await db.init_db()                                 # the next start runs the migration
+    async with db.get_db() as c:
+        (raiser,) = await (await c.execute("SELECT raised_by FROM pending WHERE ask_id='k1'")).fetchone()
+    assert raiser == "mcp:agent:a"

@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 from . import config
 from . import db as _db
 from .consent import gate
+from .contracts import link_sentence, orient
 from .conversation import bus
 from .llm import build_llm, resolve_model
 from .memory import store
@@ -62,8 +63,9 @@ How to work:
   days, answers=true to see what the user already decided on cards), chat, and pending. Use who_is,
   find and get_context to check a hunch before you report it.
 - Report a finding only if the user would act on it or be glad to know it. A quiet night is a good night.
-- Every claim cites its evidence: full task ids, event times, record names, short quotes. Copy ids
-  exactly from the tool answers. Never guess numbers: count them.
+- Every claim cites its evidence in `evidence`: full task ids, event times, record names, short quotes. Copy
+  ids exactly from the tool answers. In the title, preview, body, quick answers and why_now, name a task by its
+  words, never by its id: the user reads those. Never guess numbers: count them.
 - Never ask again about something in "Already raised" below, or something the user answered on a card.
 - At most {cap} items across asks and looks together, the most important first. Fewer is fine.
 - Write like a calm, sharp colleague: plain words, short sentences, no hype. Address the user as "you".
@@ -229,7 +231,7 @@ async def _tidy(group: list[dict], open_records: set, refused: dict) -> tuple[st
             notes.append(f"a link to {lk.get('name')!r}, which Ken does not hold, was left out")
             lk = None
         if lk:
-            links.append(lk)
+            links.append({**lk, "text": _link_text(had.kind, lk)})
         if add or lk:
             why.append(" ".join(str(t.get("why") or "").split())[:300])
     tail = f" ({'; '.join(notes)})" if notes else ""
@@ -237,7 +239,7 @@ async def _tidy(group: list[dict], open_records: set, refused: dict) -> tuple[st
         return "nothing to add" + tail, None
     title = title_of(had.kind)
     item = {"title": f"Add to {title}" if adds else f"Link {title}",
-            "preview": (adds[0] if adds else f"{title} is {links[0].get('rel')} {links[0].get('name')}")[:160],
+            "preview": (adds[0] if adds else links[0]["text"])[:160],
             "record": {"kind": str(group[0]["kind"]).lower(), "name": title, "id": had.kind},
             "add": " ".join(adds), "adds": adds, "links": links, "sources": sources, "why": " ".join(w for w in why if w)}
     return "proposed" + tail, item
@@ -416,6 +418,7 @@ How to answer:
 - Do only what the user asked. If it is unclear which tasks they mean, ask one short question first.
 - Your earlier messages list what you already did ("[done: ...]"). Never do it twice.
 - Report only what the tools confirmed. A tool that did not apply did not happen: say so.
+- Name tasks by their words. Never show the user an id.
 - When the talk reaches a decision with nothing to do ("leave it"), call `close` too.
 {tidy}
 - Plain words, short sentences, no hype. Address the user as "you". Two to four sentences."""
@@ -539,3 +542,56 @@ async def _patch(item_id: str, fields: dict) -> None:
         await c.execute("UPDATE dream_items SET body=? WHERE id=?",
                         (json.dumps({**json.loads(r["body"]), **fields}, ensure_ascii=False), item_id))
         await c.commit()
+
+
+def _link_text(kind: str, lk: dict) -> str:
+    """One proposed link as the sentence the user reads, in the link's stored direction
+    ('sashko potapov is the owner of ken gtm'), whichever record the model put it on."""
+    other = f"{_KINDS.get(str(lk.get('kind') or '').lower(), '')}.{slug(str(lk.get('name') or ''))}"
+    o = orient(kind, other, str(lk.get("rel") or ""))
+    if o is None:
+        return f"{title_of(kind)} and {lk.get('name')} ({lk.get('rel')})"
+    return link_sentence(title_of(o[0]), o[2], title_of(o[1]))
+
+
+_ID_IN_PARENS = re.compile(r"\s*\(\s*(?:tasks?\s+)?(\b(?=[0-9]*[a-f])[0-9a-f]{8,32}\b)\s*\)")
+_ID_LEADS_PARENS = re.compile(r"\(\s*(?:tasks?\s+)?(\b(?=[0-9]*[a-f])[0-9a-f]{8,32}\b),\s*")
+_TASK_ID = re.compile(r"\b[Tt]asks?\s+(\b(?=[0-9]*[a-f])[0-9a-f]{8,32}\b)")
+
+
+async def _task_names(text: str) -> dict:
+    names = {}
+    async with _db.get_db() as c:
+        for tok in set(_ID.findall(text)):
+            rows = await (await c.execute("SELECT text FROM tasks WHERE id LIKE ? || '%' LIMIT 2", (tok,))).fetchall()
+            if len(rows) == 1:                            # one task: its name; none or several: the id stays
+                t = " ".join(rows[0]["text"].split())
+                names[tok] = "\u201c" + (t if len(t) <= 70 else t[:68].rstrip() + "\u2026") + "\u201d"
+    return names
+
+
+async def readable(value):
+    """What a client shows: every task id the Dreamer cited becomes the task's name. An id in parentheses
+    beside a name is dropped, "task <id>" and a bare id become the quoted name. Ids stay in storage, where
+    the checks and the chat's actions need them."""
+    text = json.dumps(value, ensure_ascii=False)
+    names = await _task_names(text)
+    if not names:
+        return value
+
+    def walk(v):
+        if isinstance(v, str):
+            v = _ID_IN_PARENS.sub(lambda m: "" if m.group(1) in names else m.group(0), v)
+            v = _ID_LEADS_PARENS.sub(lambda m: "(" if m.group(1) in names else m.group(0), v)
+            v = _TASK_ID.sub(lambda m: names.get(m.group(1), m.group(0)), v)
+            return _ID.sub(lambda m: names.get(m.group(0), m.group(0)), v)
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        if isinstance(v, dict):
+            return {k: (x if k in ("id", "record", "sources") else walk(x)) for k, x in v.items()}
+        return v
+    out = walk(value)
+    if isinstance(out, dict):                             # an older fix: its link sentences, the right way round
+        rec = (out.get("record") or {}).get("id")
+        out["links"] = [lk if lk.get("text") or not rec else {**lk, "text": _link_text(rec, lk)} for lk in out.get("links") or []]
+    return out

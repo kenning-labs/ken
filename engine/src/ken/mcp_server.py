@@ -798,8 +798,10 @@ async def inbox_chat(item_id: str, text: str, timeout: float = 150.0) -> str:
     body = await _post(ActionKind.TOOL, json.dumps({"tool": "inbox_chat", "args": {"item_id": item_id, "text": text}}),
                        meta={"source": "Dreamer Inbox", "provenance": "user"}, timeout=timeout)
     # this turn's own actions and cards come in the engine's answer to THIS action, never from the thread
-    return json.dumps({"reply": body.get("text"), "outcome": body.get("outcome"), "actions": body.get("actions") or [],
-                       "cards": body.get("cards") or [], "item": await dream.get(item_id)}, ensure_ascii=False)
+    item = await dream.get(item_id)
+    return json.dumps({"reply": await dream.readable(body.get("text")), "outcome": body.get("outcome"),
+                       "actions": await dream.readable(body.get("actions") or []), "cards": body.get("cards") or [],
+                       "item": await dream.readable(item) if item else None}, ensure_ascii=False)
 
 
 _RECORD_CARDS = ("SELECT ask_id, evidence FROM pending WHERE kind=?1 OR kind LIKE '%:' || ?1 "
@@ -1137,7 +1139,8 @@ def build_server():
         "item to the user, then record their answer with inbox_close."))
     async def inbox_tool(status: str = "open") -> str:
         from . import dream
-        return json.dumps({"items": await dream.items(str(status or "open").lower())}, ensure_ascii=False)
+        items = [await dream.readable(i) for i in await dream.items(str(status or "open").lower())]
+        return json.dumps({"items": items}, ensure_ascii=False)
 
     @srv.tool(name="inbox_chat", description=(
         "Talk with the Dreamer about one open Inbox item: a quick answer the user tapped, or their own words. "

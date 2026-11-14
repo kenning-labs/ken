@@ -747,10 +747,12 @@ async def find(query: str) -> str:
 EVENTS_DAYS = 30
 
 
-async def events(since: str = "", until: str = "", now: int | None = None) -> str:
+async def events(since: str = "", until: str = "", now: int | None = None, answers: bool = False) -> str:
     """Live events (not past their `until`) whose time falls in [since, until], newest first.
     Local ISO dates or datetimes; a date-only `until` means the end of that day. Defaults: the
-    last EVENTS_DAYS days up to now."""
+    last EVENTS_DAYS days up to now. `answers`: also the user's answers to cards in the window
+    (the always-on agent's resume step: what did the user decide since my last run?). An agent
+    token sees only the cards its own calls raised; the user's token sees all, with `raised_by`."""
     now = now or now_ms()
     day = 86_400_000
     try:
@@ -760,9 +762,23 @@ async def events(since: str = "", until: str = "", now: int | None = None) -> st
             hi = local_ms(until) + (day - 1 if len(str(until).strip()) == 10 else 0)
     except (ValueError, TypeError):
         return json.dumps({"error": "since and until must be local ISO dates or datetimes like 2026-03-11"})
-    return json.dumps({"events": [{"what": e.summary, "when": _iso(e.at), **({"until": _iso(e.until)} if e.until else {})}
-                                  for e in await store.events_between(lo, hi, now=now)],
-                       "since": _iso(lo), "until": _iso(hi)})
+    out = {"events": [{"what": e.summary, "when": _iso(e.at), **({"until": _iso(e.until)} if e.until else {})}
+                      for e in await store.events_between(lo, hi, now=now)],
+           "since": _iso(lo), "until": _iso(hi)}
+    if answers:
+        mine = _caller() if _caller().startswith("mcp:agent") else None
+        rows, more = await store.card_answers(lo, hi, channel=mine)
+        # yes / no; not_same: on a "same record?" card, No means "save it as new" (a new card follows);
+        # failed: the user said yes to an action, but nothing could perform it
+        word = {"approved": "yes", "rejected": "no", "not_same": "not_same", "failed": "failed"}
+        out["answers"] = [{"card_id": a["card_id"], "about": a["kind"], "type": a["ask_type"] or "belief",
+                           "answer": word.get(a["outcome"], a["outcome"]), "when": _iso(a["at"]),
+                           **{k: a[k] for k in ("kept", "dropped", "held") if k in a},
+                           **({} if mine else {"raised_by": a["channel"] or "unknown"})}
+                          for a in rows]
+        if more:
+            out["more"] = True        # newest first, so the OLDEST were cut: ask again with until = the oldest `when`
+    return json.dumps(out)
 
 
 async def decide(card_id: str, approved: bool, edited: str = "", timeout: float = 30.0) -> str:
@@ -839,9 +855,15 @@ def build_server():
 
     @srv.tool(name="events", description=(
         "What happened in a date window, no word search: live events with their time, newest first. "
-        "`since` / `until` = local ISO dates or datetimes; default the last 30 days."))
-    async def events_tool(since: str = "", until: str = "") -> str:
-        return await events(since, until)
+        "`since` / `until` = local ISO dates or datetimes; default the last 30 days. `answers`: true adds the "
+        "user's answers to cards in the window, newest first (card_id, about, answer, when). An agent token sees "
+        "only the cards its own writes raised: call events(since=<your last run>, answers=true) at the start of a run "
+        "to learn what the user decided, instead of guessing from what disappeared. `answer`: yes | no | not_same "
+        "(No on a 'same record?' card: Ken already asks again to save it as new, so do not propose it again) | failed "
+        "(the user said yes to an action but it could not be done). A batch answer adds kept / dropped / held counts. "
+        "`more`: true when older answers were cut: ask again with `until` = the oldest `when` you got."))
+    async def events_tool(since: str = "", until: str = "", answers: bool = False) -> str:
+        return await events(since, until, answers=answers)
 
     @srv.tool(name="get_context", description=(
         "Everything that matters for ONE task: the related people, projects and preferences with "
@@ -1083,7 +1105,9 @@ def http_app(token: str | None, host: str = "127.0.0.1", agent_tokens: dict | No
         text = message_of((await request.body()).decode(errors="replace"))
         if not text:
             return PlainTextResponse("(empty message — no text in the request body)")
-        return PlainTextResponse(plain(await reply_to(text, "http:client")))
+        # the channel the token matched (mcp:user, mcp:agent:<name>), as for the MCP tools: an agent
+        # token posting here stays an agent (its provenance ceiling, and who raised its cards)
+        return PlainTextResponse(plain(await reply_to(text, _caller())))
 
     @srv.custom_route("/today", methods=["GET"])
     async def today_route(_: Request) -> PlainTextResponse:

@@ -466,7 +466,7 @@ class Engine:
         if agent is None:
             # nobody can ever perform it: close the ask so it cannot be tapped forever
             if details.get("ask_id"):
-                await gate.close_act(details["ask_id"])
+                await gate.close_act(details["ask_id"], done=False)   # closed, but never answered "yes, done"
             await self._audit("act_failed", proposal.intent, f"no agent named {name!r}")
             await bus.append_renderable(Renderable(
                 id=new_id(), conversation_id=cid, kind=RenderableKind.ADVICE, author="kip",

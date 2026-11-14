@@ -51,7 +51,13 @@ flowchart LR
 name as given; `assign_task` moves it) and may wait on other tasks (`link_tasks`, table
 `task_deps`; rows carry `depends_on` and `blocked` while one is open; cycles are refused).
 `tasks(status=open|done|dropped|all)` and `events(since, until)` read history without a word
-search. Every direct write takes an optional `at` = when the change happened; a task keeps
+search. `events(answers=true)` adds the user's answers to cards in the window, read from the gate's
+`card_outcome` audit rows. A card keeps `raised_by`, the channel of the call that first raised it:
+set once, carried to a card asked again, never moved by a second caller repeating it. So an agent
+token sees only the answers to its own cards (`pending` still lists every open card to every token). The answer is `yes`, `no`, or `not_same` (No on a "same record?"
+card, which asks again as new); a batch answer adds its kept/dropped/held counts, and an action
+is answered once, when it is done. It is the resume step of an always-on agent: on its next run it
+asks what the user decided since its last run, instead of guessing from what disappeared. Every direct write takes an optional `at` = when the change happened; a task keeps
 `changed_at` (a record its `updated_at`), and a write whose `at` is older returns `stale` and
 changes nothing, so a late, old update never wins.
 

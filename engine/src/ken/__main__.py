@@ -98,8 +98,11 @@ async def eval_rows(now: int | None = None) -> dict:
             key = (str(d.get("author", "")), str(d.get("ask_type", "belief")))
             r = rows.setdefault(key, {"cards": 0, "approved": 0, "rejected": 0, "ignored": 0})
             r["cards"] += 1
-            if d.get("outcome") in ("approved", "rejected"):
-                r[d["outcome"]] += 1
+            # a tap is a tap: No on a "same record?" card counts as a no; Yes on an act that could not
+            # be done counts as a yes (the user approved it)
+            tap = {"not_same": "rejected", "failed": "approved"}.get(d.get("outcome"), d.get("outcome"))
+            if tap in ("approved", "rejected"):
+                r[tap] += 1
         cur = await c.execute("SELECT author, ask_type FROM pending WHERE created_at < ?",
                               (now - 86_400_000,))
         for author, ask_type in await cur.fetchall():

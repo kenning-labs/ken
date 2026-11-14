@@ -46,7 +46,7 @@ llm:
 
 # The Dreamer (optional, off by default): once a night it reads everything Ken holds with a
 # reasoning model. What needs you goes to the Inbox (MCP `inbox`, at most 6 a night, often none);
-# small fixes to your records come as confirm cards. Its own `llm` block replaces the section above
+# small fixes to your records wait there too, until you apply them (`inbox_apply`). Its own `llm` block replaces the section above
 # (set every key it needs), so it can run on any OpenAI-compatible host. DeepSeek V4.1 Flash at max effort costs about one
 # cent a night on a filled world. Run it now with `ken dream`.
 # dreamer:

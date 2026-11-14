@@ -786,6 +786,39 @@ async def events(since: str = "", until: str = "", now: int | None = None, answe
     return json.dumps(out)
 
 
+async def inbox_apply(item_id: str) -> str:
+    """Apply one proposed Inbox fix as the user's own instruction: remember() the note as it is NOW
+    plus the fix, then approve the card that write raised (the tap was the consent). Refused while
+    another card on the same record is open: a second card on a record would replace the first."""
+    from . import dream
+    if _caller().startswith("mcp:agent"):
+        return json.dumps({"outcome": "forbidden", "text": "the Inbox is the user's: an agent token cannot apply a fix"})
+    item = await dream.get(item_id)
+    if item is None or item["kind"] != "tidy" or item["status"] != "open":
+        return json.dumps({"outcome": "no_item", "text": f"no open fix {item_id!r} in the Inbox"})
+    rec = item["record"]
+    if any(c["kind"] == rec["id"] or c["kind"].endswith(":" + rec["id"]) for c in await pending_cards()):
+        return json.dumps({"outcome": "blocked", "text": f"a card about {rec['name']} waits in Ken wants to check: "
+                                                         "answer it first, then apply this fix"})
+    now = next((e for e in await store.get_structured(rec["id"].split(".", 1)[0] + ".") if e.kind == rec["id"]), None)
+    if now is None:
+        await dream.close(item_id, "the record is gone")
+        return json.dumps({"outcome": "no_record", "text": f"{rec['name']} is no longer in Ken, so the fix was closed"})
+    add = item.get("add") or ""
+    note = now.content if not add or norm(add) in norm(now.content) else f"{now.content.rstrip()} {add}"
+    args = {"kind": rec["kind"], "name": rec["name"], "note": note}
+    if item.get("links"):
+        args["links"] = item["links"]
+    out = json.loads(await typed("remember", args, source="Dreamer", provenance="user"))
+    for card_id in out.get("cards") or []:                 # the tap was the consent
+        out = {**out, **json.loads(await decide(card_id, True))}
+    ok = out.get("outcome") in ("applied", "collapsed")
+    if ok:
+        await dream.close(item_id, "applied")
+    return json.dumps({"outcome": "applied" if ok else out.get("outcome"),
+                       "text": f"Saved to {rec['name']}." if ok else (out.get("text") or "not saved")})
+
+
 async def decide(card_id: str, approved: bool, edited: str = "", timeout: float = 30.0) -> str:
     """Answer one open card on the USER's behalf: the one tap every client makes, anchored to
     the card so the refusal enters kip's history. The outcome is the engine's own word
@@ -813,7 +846,7 @@ async def decide(card_id: str, approved: bool, edited: str = "", timeout: float 
 TOOL_NAMES = frozenset({"tasks", "get_context", "who_is", "find", "add_task", "complete_task", "discard_task",
                         "reschedule_task", "log_event", "remember", "forget", "tell", "pending", "decide",
                         "hydrate", "world", "schedule_task", "assign_task", "link_tasks", "events", "chat_history",
-                        "inbox", "inbox_close"})
+                        "inbox", "inbox_close", "inbox_apply"})
 
 
 _AT = "`at` = when this change HAPPENED (local ISO date or datetime), for a late report; a change older than the task's last change is refused as `stale` and nothing changes. Empty = now."
@@ -1059,6 +1092,14 @@ def build_server():
     async def inbox_tool(status: str = "open") -> str:
         from . import dream
         return json.dumps({"items": await dream.items(str(status or "open").lower())}, ensure_ascii=False)
+
+    @srv.tool(name="inbox_apply", description=(
+        "Apply one proposed fix from the Inbox (kind tidy): its `add` is appended to the record's note as it "
+        "is now, with its links. The user's tap is the consent, so nothing waits for a second yes. If an "
+        "outside agent's card on the same record waits in pending, nothing changes: answer that card first. "
+        "To skip a fix, use inbox_close. The user's token only."))
+    async def inbox_apply_tool(item_id: str) -> str:
+        return await inbox_apply(item_id)
 
     @srv.tool(name="inbox_close", description=(
         "Close one Inbox item with the user's answer: a quick answer they picked, or their own words. The "

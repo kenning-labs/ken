@@ -4,8 +4,8 @@ read tools and a reasoning model, then:
   ask    something only the user can decide (a conflict, stuck work, a task the facts made
          pointless) -> an Inbox item
   look   a pattern worth knowing, no decision needed (a slot that never holds) -> an Inbox item
-  tidy   an additive fix to a record (a fact a note lacks, a missing link) -> a confirm card
-         through the gate: proposed, never applied, until the user trusts it
+  tidy   an additive fix to a record (a fact a note lacks, a missing link) -> an Inbox item the
+         user applies (inbox_apply) or skips: proposed, never applied on its own
 
 Asks and looks together are capped at CAP a night; a quiet night says nothing. Nothing the
 model writes is taken on its word: an item that cites an id Ken does not hold is dropped, and
@@ -24,10 +24,7 @@ from datetime import datetime, timedelta
 
 from . import config
 from . import db as _db
-from .agents.base import Context, Slice
-from .capabilities import MemoryReader, Proposer
-from .captures import Captures
-from .contracts import Evidence, Provenance
+from .consent import gate
 from .conversation import bus
 from .llm import build_llm, resolve_model
 from .memory import store
@@ -53,7 +50,7 @@ read everything Ken knows and do three jobs.
      proof of a fact (a closed task does not tell you how it went).
    - Add a missing link (a person is a member of a project, an asset is part of a project) when the
      tasks or notes show it.
-   Never rewrite or remove the user's words. Each tidy becomes a card the user confirms.
+   Never rewrite or remove the user's words. Each tidy waits in the user's Inbox until they apply it.
 2. Ask (needs the user): something only the user can decide. Conflicts (two records that look like
    one, two notes that disagree, a note that is out of date), stuck work (many late tasks), a task the
    facts already answered or made pointless, people the user waits on for a long time.
@@ -194,18 +191,20 @@ async def _source_ok(src, add: str) -> bool:
     return False
 
 
-async def _tidy(group: list[dict], night: str) -> str:
-    """Every tidy item for ONE record -> one confirm card (or why not): a second card on the same
-    record would replace the first. The note is the old one with each checked `add` appended:
-    the model's words never replace the user's."""
+async def _tidy(group: list[dict], open_records: set) -> tuple[str, dict | None]:
+    """Every tidy item for ONE record -> one proposed fix for the Inbox (or why not). It holds only
+    what to ADD; inbox_apply appends it to the note as it is when the user presses Apply, so the
+    model's words never replace the user's and a note edited since the night is not lost."""
     t = group[0]
     ns = _KINDS.get(str(t.get("kind") or "").lower())
     name = str(t.get("name") or "").strip()
     if not ns or not name:
-        return "no record named"
+        return "no record named", None
     had = next((e for e in await store.get_structured(ns + ".") if e.kind == f"{ns}.{slug(name)}"), None)
     if had is None:
-        return f"no {t.get('kind')} {name!r}"
+        return f"no {t.get('kind')} {name!r}", None
+    if had.kind in open_records:
+        return "a fix for it already waits in the Inbox", None
     adds, links, why, notes = [], [], [], []
     for t in group:
         add = " ".join(str(t.get("add") or "").split())
@@ -220,24 +219,26 @@ async def _tidy(group: list[dict], night: str) -> str:
             links.append(t["link"])
         if add or isinstance(t.get("link"), dict):
             why.append(" ".join(str(t.get("why") or "").split())[:300])
-    if not adds:
-        # a link alone would be saved at once (the note is unchanged, so nothing to confirm): while
-        # tidy is proposed, a link only rides on a fact the user confirms on the same card
-        why = "a link with no fact to confirm it was left out" if links else "nothing to add"
-        return why + (f" ({'; '.join(notes)})" if notes else "")
-    note = " ".join([had.content.rstrip(), *adds])
-    ctx = Context(conversation_id=bus.MAIN, now=now_ms())
-    ctx.memory = MemoryReader(Slice(structured=list(_KINDS.values()), tasks="open"))
-    ctx.propose = Proposer(conversation_id=bus.MAIN, author="Dreamer")
-    cap = Captures(ctx, message=f"Dreamer, night of {night}: {' '.join(why)}",
-                   evidence=[Evidence(ref=f"dreamer:{night}", source="Dreamer")],
-                   provenance=Provenance.AGENT_INFERRED)
-    r = await cap.remember(group[0]["kind"], name, note, links=links or None)
-    return r.outcome + (f" ({'; '.join(notes)})" if notes else "")
+    tail = f" ({'; '.join(notes)})" if notes else ""
+    if not adds and not links:
+        return "nothing to add" + tail, None
+    title = f"Add to {_title_of(had)}" if adds else f"Link {_title_of(had)}"
+    item = {"title": title, "preview": (adds[0] if adds else _link_line(_title_of(had), links[0]))[:160],
+            "record": {"kind": str(group[0]["kind"]).lower(), "name": _title_of(had), "id": had.kind},
+            "add": " ".join(adds), "links": links, "why": " ".join(w for w in why if w)}
+    return "proposed" + tail, item
+
+
+def _title_of(e) -> str:
+    return e.subject or e.kind.split(".", 1)[-1].replace("_", " ")
+
+
+def _link_line(name: str, lk: dict) -> str:
+    return f"{name} is {lk.get('rel', 'linked to')} {lk.get('name', '')}".strip()
 
 
 async def run_once(now: int | None = None, llm=None) -> dict:
-    """One night: the model reads, the engine checks, asks and looks go to the Inbox, tidy to cards.
+    """One night: the model reads, the engine checks, and asks, looks and tidy go to the Inbox.
     Returns what it did; the same goes to one `dream` audit row."""
     now = now or now_ms()
     llm = llm or _llm()
@@ -245,6 +246,12 @@ async def run_once(now: int | None = None, llm=None) -> dict:
         await _db.audit("dream_error", "dreamer", "no model: set dreamer.llm (or llm) with a real api_key")
         return {"error": "no model"}
     night = datetime.fromtimestamp(now / 1000).strftime("%Y-%m-%d")  # noqa: DTZ006 — local, by design
+    # the Dreamer never keeps a card in the shared queue ("Ken wants to check" is for writes from
+    # outside); cards an older version raised go back, and tonight proposes them in the Inbox
+    async with _db.get_db() as c:
+        old = [r["ask_id"] for r in await (await c.execute("SELECT ask_id FROM pending WHERE author='Dreamer'")).fetchall()]
+    for ask_id in old:
+        await gate.withdraw(ask_id, reason="the Dreamer proposes fixes in the Inbox, not as cards")
     async with _db.get_db() as c:                     # a week unanswered: it closes itself
         await c.execute("UPDATE dream_items SET status='closed', outcome='expired', closed_at=? "
                         "WHERE status='open' AND created_at<?", (now, now - EXPIRE_DAYS * _DAY))
@@ -285,13 +292,22 @@ async def run_once(now: int | None = None, llm=None) -> dict:
     for t in out.get("tidy") or []:
         if isinstance(t, dict):
             groups.setdefault((str(t.get("kind")).lower(), slug(str(t.get("name") or ""))), []).append(t)
-    tidy = []
+    tidy, fixes = [], []
+    open_records = {json.loads(i["body"]).get("record", {}).get("id") for i in await _open("tidy")}
     for group in groups.values():
         name = group[0].get("name")
         try:
-            tidy.append(f"{name}: {await _tidy(group, night)}")
+            said, item = await _tidy(group, open_records)
         except Exception as exc:  # noqa: BLE001 — one bad tidy never loses the night
-            tidy.append(f"{name}: failed {exc!r}")
+            said, item = f"failed {exc!r}", None
+        tidy.append(f"{name}: {said}")
+        if item:
+            fixes.append(item)
+    async with _db.get_db() as c:
+        for item in fixes:
+            await c.execute("INSERT INTO dream_items (id, night, kind, body, created_at) VALUES (?,?,?,?,?)",
+                            (new_id(), night, "tidy", json.dumps(item, ensure_ascii=False), now))
+        await c.commit()
     done = {"night": night, "asks": sum(k == "ask" for k, _ in kept), "looks": sum(k == "look" for k, _ in kept),
             "tidy": tidy, "dropped": dropped, "skipped": out.get("skipped") or [],
             **({} if out else {"error": "the model gave no JSON", "text": text[:500]})}
@@ -323,6 +339,17 @@ async def run_scheduled(now: int | None = None) -> bool:
     await store.set_meta("dream:day", stamp)   # stamped at the start: a failed night waits for tomorrow
     _running = asyncio.create_task(_guarded(now))
     return True
+
+
+async def _open(kind: str) -> list:
+    async with _db.get_db() as c:
+        return await (await c.execute("SELECT body FROM dream_items WHERE status='open' AND kind=?", (kind,))).fetchall()
+
+
+async def get(item_id: str) -> dict | None:
+    async with _db.get_db() as c:
+        r = await (await c.execute("SELECT * FROM dream_items WHERE id=?", (str(item_id),))).fetchone()
+    return None if r is None else {"id": r["id"], "kind": r["kind"], "status": r["status"], **json.loads(r["body"])}
 
 
 async def items(status: str = "open") -> list[dict]:

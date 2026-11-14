@@ -331,6 +331,14 @@ class Engine:
             tool, args = str(spec.get("tool", "")), dict(spec.get("args") or {})
         except (ValueError, TypeError, AttributeError):
             tool, args = "", {}
+        if tool == "inbox_chat":                       # one Dreamer turn on one Inbox item
+            from . import dream
+            if str(action.channel or "").startswith("mcp:agent"):   # the Inbox is the user's
+                await self._reply(cid, action.id, "the Inbox is the user's", outcome="forbidden")
+                return
+            r = await dream.chat(str(args.get("item_id") or ""), str(args.get("text") or ""), judge=self.judge)
+            await self._reply(cid, action.id, r["reply"], outcome=r["outcome"], tool="inbox_chat")
+            return
         agent = self.assistant
         if agent is None or tool not in self._TOOLS:
             await self._audit("tool_unknown", action.id, tool or (action.text or "")[:80])

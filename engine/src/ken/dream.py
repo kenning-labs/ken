@@ -400,3 +400,112 @@ async def close(item_id: str, outcome: str) -> bool:
                               (outcome, now_ms(), str(item_id)))
         await c.commit()
         return cur.rowcount == 1
+
+
+CHAT_PROMPT = """You are the Dreamer, Ken's overnight agent. You raised one item in the user's Inbox, and now
+the user talks with you about it. Ken is their context engine: tasks, people, projects and what happened.
+
+The item (kind ask = needs a decision, look = worth knowing, tidy = a proposed fix to a record):
+{item}
+
+It is now {now} local time.
+
+How to answer:
+- When the user picks an answer or tells you what to do, carry it out with the tools, then call `close` with
+  one short line that says what was decided and done. A quick answer they tapped is such an instruction.
+- Do only what the user asked. If it is unclear which tasks they mean, ask one short question first.
+- Report only what the tools confirmed. A tool that did not apply did not happen: say so.
+- When the talk reaches a decision with nothing to do ("leave it"), call `close` too.
+- For a tidy item: `revise_fix` changes the proposed sentences in the user's words; the user still presses
+  Apply. Never write a note yourself.
+- Plain words, short sentences, no hype. Address the user as "you". Two to four sentences."""
+
+
+async def chat(item_id: str, text: str, *, judge=None) -> dict:
+    """One user turn on one open Inbox item: the Dreamer answers with the read tools, the task writes
+    (the user's own instruction, so they apply at once and are audited) and `close`. The thread is
+    stored on the item. Returns {reply, outcome, closed, actions}; the engine posts it as the answer."""
+    from .agents.assistant import _parse_when
+    from .agents.base import Context, Slice
+    from .capabilities import MemoryReader, Proposer
+    from .captures import Captures
+    from .contracts import Evidence, Provenance
+
+    item = await get(item_id)
+    if item is None or item["status"] != "open":
+        return {"reply": f"There is no open Inbox item {item_id!r}.", "outcome": "no_item", "closed": False, "actions": []}
+    text = " ".join(str(text or "").split())[:2000]
+    if not text:
+        return {"reply": "Say what you want to do with it.", "outcome": "invalid", "closed": False, "actions": []}
+    llm = _llm()
+    if llm is None:
+        return {"reply": "The Dreamer has no model, so it cannot answer.", "outcome": "no_model", "closed": False, "actions": []}
+    now = now_ms()
+    ctx = Context(conversation_id=bus.MAIN, now=now, message=text)
+    ctx.memory = MemoryReader(Slice(structured=list(_KINDS.values()) + ["preferences", "facts"], tasks="open", events="recent"))
+    ctx.propose = Proposer(conversation_id=bus.MAIN, author="Dreamer")
+    cap = Captures(ctx, judge=judge, message=text, evidence=[Evidence(ref=f"inbox:{item_id}", source="Dreamer Inbox")],
+                   provenance=Provenance.USER_INSTRUCTED, parse_when=_parse_when)
+    actions: list[dict] = []
+    state = {"closed": None, "fix": None}
+
+    def act(name, fn):
+        async def run(**kw):
+            r = await fn(**kw)
+            actions.append({"tool": name, "outcome": r.outcome, "text": r.text})
+            return r.text
+        return run
+
+    async def close_item(outcome: str):
+        state["closed"] = " ".join(str(outcome or "").split())[:500] or "closed"
+        return "closed"
+
+    async def revise_fix(add: str):
+        if item["kind"] != "tidy":
+            return "only a tidy item has a fix to revise"
+        state["fix"] = " ".join(str(add or "").split())
+        return "the fix now reads: " + state["fix"]
+
+    o = lambda **p: {"type": "object", "properties": {k: {"type": v} for k, v in p.items()}}
+    tools = _tools() + [
+        Tool("complete_task", "Mark a task done. task = its id (or exact text).", o(task="string"), act("complete_task", cap.complete_task)),
+        Tool("discard_task", "Drop a task (not done), with a short reason.", o(task="string", reason="string"),
+             act("discard_task", cap.discard_task)),
+        Tool("reschedule_task", "Set a task's deadline: a local ISO date or datetime.", o(task="string", deadline="string"),
+             act("reschedule_task", cap.reschedule_task)),
+        Tool("schedule_task", "Book a work slot today or later: start = local ISO datetime, minutes; start '' takes it off.",
+             o(task="string", start="string", minutes="integer"), act("schedule_task", cap.schedule_task)),
+        Tool("add_task", "Add a task the user asked for. deadline = local ISO date or datetime, optional.",
+             o(text="string", deadline="string", project="string"), act("add_task", cap.add_task)),
+        Tool("close", "Close this item with one short line: what was decided and done.", o(outcome="string"), close_item),
+        Tool("revise_fix", "Tidy items only: replace the proposed sentences with the user's version.", o(add="string"), revise_fix),
+    ]
+    thread = list(item.get("thread") or []) + [{"role": "user", "text": text, "at": now}]
+    shown = {k: v for k, v in item.items() if k not in ("thread", "status", "id")}
+    system = CHAT_PROMPT.format(item=json.dumps(shown, ensure_ascii=False),
+                                now=datetime.fromtimestamp(now / 1000).strftime("%A %d %B %Y, %H:%M"))  # noqa: DTZ006
+    messages = [{"role": "user" if m["role"] == "user" else "assistant", "content": m["text"]} for m in thread]
+    reply = (await llm.complete(system, messages, tools=tools)).strip()
+    if not reply:
+        done = [a["text"] for a in actions]
+        reply = " ".join(done) if done else ("Closed." if state["closed"] else "I have no answer to that. Try again.")
+    thread.append({"role": "dreamer", "text": reply, "at": now_ms(), **({"actions": actions} if actions else {})})
+    body_patch = {"thread": thread}
+    if state["fix"] is not None:
+        sentences = [x.strip() + "." for x in state["fix"].rstrip(".").split(". ") if x.strip()]
+        body_patch.update({"add": state["fix"], "adds": sentences, "preview": state["fix"][:160]})
+    await _patch(item_id, body_patch)
+    if state["closed"]:
+        await close(item_id, state["closed"])
+    return {"reply": reply, "outcome": "closed" if state["closed"] else "answered", "closed": bool(state["closed"]),
+            "actions": actions}
+
+
+async def _patch(item_id: str, fields: dict) -> None:
+    async with _db.get_db() as c:
+        r = await (await c.execute("SELECT body FROM dream_items WHERE id=?", (item_id,))).fetchone()
+        if r is None:
+            return
+        await c.execute("UPDATE dream_items SET body=? WHERE id=?",
+                        (json.dumps({**json.loads(r["body"]), **fields}, ensure_ascii=False), item_id))
+        await c.commit()

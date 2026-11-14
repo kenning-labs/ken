@@ -554,44 +554,51 @@ def _link_text(kind: str, lk: dict) -> str:
     return link_sentence(title_of(o[0]), o[2], title_of(o[1]))
 
 
-_ID_IN_PARENS = re.compile(r"\s*\(\s*(?:tasks?\s+)?(\b(?=[0-9]*[a-f])[0-9a-f]{8,32}\b)\s*\)")
-_ID_LEADS_PARENS = re.compile(r"\(\s*(?:tasks?\s+)?(\b(?=[0-9]*[a-f])[0-9a-f]{8,32}\b),\s*")
-_TASK_ID = re.compile(r"\b[Tt]asks?\s+(\b(?=[0-9]*[a-f])[0-9a-f]{8,32}\b)")
+# an id in brackets right after a quoted name: the name already says it
+_ID_AFTER_NAME = re.compile(r"([\"\u201d])\s*\(\s*(?:tasks?\s+)?(\b(?=[0-9]*[a-f])[0-9a-f]{8,32}\b)\s*\)")
+# "task <id>" or a bare id: one pass, so a name put in is never scanned again
+_ANY_ID = re.compile(r"(?:\b[Tt]asks?\s+)?(\b(?=[0-9]*[a-f])[0-9a-f]{8,32}\b)")
+_KEEP = ("id", "record", "sources")                       # never shown as text, never rewritten
 
 
-async def _task_names(text: str) -> dict:
-    names = {}
+async def _task_names() -> list[tuple[str, str]]:
     async with _db.get_db() as c:
-        for tok in set(_ID.findall(text)):
-            rows = await (await c.execute("SELECT text FROM tasks WHERE id LIKE ? || '%' LIMIT 2", (tok,))).fetchall()
-            if len(rows) == 1:                            # one task: its name; none or several: the id stays
-                t = " ".join(rows[0]["text"].split())
-                names[tok] = "\u201c" + (t if len(t) <= 70 else t[:68].rstrip() + "\u2026") + "\u201d"
-    return names
+        return [(r["id"], " ".join((r["text"] or "").split())) for r in await (await c.execute("SELECT id, text FROM tasks")).fetchall()]
 
 
 async def readable(value):
-    """What a client shows: every task id the Dreamer cited becomes the task's name. An id in parentheses
-    beside a name is dropped, "task <id>" and a bare id become the quoted name. Ids stay in storage, where
-    the checks and the chat's actions need them."""
-    text = json.dumps(value, ensure_ascii=False)
-    names = await _task_names(text)
-    if not names:
-        return value
+    """The Inbox as a person reads it, for a client that shows it as is (the web page asks for it with
+    inbox(readable=true); an AI client gets the ids and can act on them). Each task id the Dreamer cited
+    becomes the task's quoted name; an id in brackets right after a quoted name is dropped. Unknown ids,
+    other numbers and the item's own fields stay. A fix stored before link sentences existed gets them,
+    and its preview with them. One query for all task names, one pass per string."""
+    tasks, cache = await _task_names(), {}
+
+    def name(tok: str) -> str | None:
+        if tok not in cache:
+            hits = [t for i, t in tasks if i.startswith(tok)]
+            cache[tok] = None if len(hits) != 1 else "\u201c" + (hits[0] if len(hits[0]) <= 70 else hits[0][:68].rstrip() + "\u2026") + "\u201d"
+        return cache[tok]
+
+    def text(v: str) -> str:
+        v = _ID_AFTER_NAME.sub(lambda m: m.group(1) if name(m.group(2)) else m.group(0), v)
+        return _ANY_ID.sub(lambda m: name(m.group(1)) or m.group(0), v)
 
     def walk(v):
         if isinstance(v, str):
-            v = _ID_IN_PARENS.sub(lambda m: "" if m.group(1) in names else m.group(0), v)
-            v = _ID_LEADS_PARENS.sub(lambda m: "(" if m.group(1) in names else m.group(0), v)
-            v = _TASK_ID.sub(lambda m: names.get(m.group(1), m.group(0)), v)
-            return _ID.sub(lambda m: names.get(m.group(0), m.group(0)), v)
+            return text(v)
         if isinstance(v, list):
             return [walk(x) for x in v]
         if isinstance(v, dict):
-            return {k: (x if k in ("id", "record", "sources") else walk(x)) for k, x in v.items()}
+            return {k: (x if k in _KEEP else walk(x)) for k, x in v.items()}
         return v
-    out = walk(value)
-    if isinstance(out, dict):                             # an older fix: its link sentences, the right way round
+
+    def one(item):
+        out = walk(item)
         rec = (out.get("record") or {}).get("id")
-        out["links"] = [lk if lk.get("text") or not rec else {**lk, "text": _link_text(rec, lk)} for lk in out.get("links") or []]
-    return out
+        if rec and out.get("links") and not all(lk.get("text") for lk in out["links"]):
+            out["links"] = [lk if lk.get("text") else {**lk, "text": _link_text(rec, lk)} for lk in out["links"]]
+            if not out.get("add"):                        # a link-only fix: its preview is the link sentence
+                out["preview"] = out["links"][0]["text"][:160]
+        return out
+    return [one(i) for i in value] if isinstance(value, list) else one(value) if isinstance(value, dict) else walk(value)

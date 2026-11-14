@@ -798,10 +798,8 @@ async def inbox_chat(item_id: str, text: str, timeout: float = 150.0) -> str:
     body = await _post(ActionKind.TOOL, json.dumps({"tool": "inbox_chat", "args": {"item_id": item_id, "text": text}}),
                        meta={"source": "Dreamer Inbox", "provenance": "user"}, timeout=timeout)
     # this turn's own actions and cards come in the engine's answer to THIS action, never from the thread
-    item = await dream.get(item_id)
-    return json.dumps({"reply": await dream.readable(body.get("text")), "outcome": body.get("outcome"),
-                       "actions": await dream.readable(body.get("actions") or []), "cards": body.get("cards") or [],
-                       "item": await dream.readable(item) if item else None}, ensure_ascii=False)
+    return json.dumps({"reply": body.get("text"), "outcome": body.get("outcome"), "actions": body.get("actions") or [],
+                       "cards": body.get("cards") or [], "item": await dream.get(item_id)}, ensure_ascii=False)
 
 
 _RECORD_CARDS = ("SELECT ask_id, evidence FROM pending WHERE kind=?1 OR kind LIKE '%:' || ?1 "
@@ -1135,12 +1133,13 @@ def build_server():
     @srv.tool(name="inbox", description=(
         "The Dreamer's Inbox: what its nightly read of Ken found. kind ask = needs the user's decision "
         "(quick = answers it suggests, the first its recommendation); kind look = worth knowing, no decision. "
-        "Each item cites its evidence. `status`: open (default) | closed (with the outcome) | all. Show an open "
+        "Each item cites its evidence, with task ids you can act on. `status`: open (default) | closed (with the outcome) | all. "
+        "`readable`: true puts task names in place of ids, for a page that shows the items as they are. Show an open "
         "item to the user, then record their answer with inbox_close."))
-    async def inbox_tool(status: str = "open") -> str:
+    async def inbox_tool(status: str = "open", readable: bool = False) -> str:
         from . import dream
-        items = [await dream.readable(i) for i in await dream.items(str(status or "open").lower())]
-        return json.dumps({"items": items}, ensure_ascii=False)
+        items = await dream.items(str(status or "open").lower())
+        return json.dumps({"items": await dream.readable(items) if readable else items}, ensure_ascii=False)
 
     @srv.tool(name="inbox_chat", description=(
         "Talk with the Dreamer about one open Inbox item: a quick answer the user tapped, or their own words. "

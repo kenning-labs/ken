@@ -325,14 +325,19 @@ async def hydrate(items: str | list = "", source: str = "hydrate", provenance: s
 TASK_STATUSES = ("open", "done", "dropped", "all")
 
 
-async def tasks(filter: str = "", now: int | None = None, status: str = "open") -> str:
+async def tasks(filter: str = "", now: int | None = None, status: str = "open", since: str = "") -> str:
     """Open tasks with id, due, age, project, evidence and the lane kip last published; plus how many
     questions wait for the user. `filter`: a lane name, or a substring of the text or the project.
-    `status`: open (default) | done | dropped | all — closed rows carry status, completed, drop_reason."""
+    `status`: open (default) | done | dropped | all — closed rows carry status, completed, drop_reason.
+    `since`: a local ISO date; closed rows only when closed (else created) at or after it."""
     now = now or now_ms()
     status = str(status or "open").strip().lower()
     if status not in TASK_STATUSES:
         return json.dumps({"error": f"status must be one of {', '.join(TASK_STATUSES)}, not {status[:20]!r}"})
+    try:
+        lo = local_ms(since) if str(since or "").strip() else 0
+    except ValueError:
+        return json.dumps({"error": f"since must be a local ISO date, not {str(since)[:20]!r}"})
     deps = await store.deps_map()
     all_open = await store.open_tasks() if status in ("open", "all") else []
     lanes = await _lanes(all_open, now)
@@ -361,7 +366,7 @@ async def tasks(filter: str = "", now: int | None = None, status: str = "open") 
                               created=_iso(t.created_at), **({"status": "open"} if status == "all" else {})))
     if status != "open":
         for t in await store.tasks_by_status(("done", "dropped") if status == "all" else (status,)):
-            if f and not hit(t):
+            if (f and not hit(t)) or (t.completed_at or t.created_at or 0) < lo:
                 continue
             rows.append(_task_row(t, now, deps, status=t.status, completed=_iso(t.completed_at),
                                   created=_iso(t.created_at),
@@ -849,9 +854,10 @@ def build_server():
         "`filter` narrows by lane (overdue, today, this week, someday) or a substring of the text or the project. "
         "Each row has `owner` (null = the user) and, when it waits on other tasks, `depends_on` [{id, text, status}] "
         "and `blocked` (true while one is open). `status`: open (default) | done | dropped | all — closed rows "
-        "carry status, completed, drop_reason."))
-    async def tasks_tool(filter: str = "", status: str = "open") -> str:
-        return await tasks(filter, status=status)
+        "carry status, completed, drop_reason. `since`: a local ISO date; closed rows only from then on "
+        "(status=done since=<two weeks ago> = what got done lately)."))
+    async def tasks_tool(filter: str = "", status: str = "open", since: str = "") -> str:
+        return await tasks(filter, status=status, since=since)
 
     @srv.tool(name="events", description=(
         "What happened in a date window, no word search: live events with their time, newest first. "

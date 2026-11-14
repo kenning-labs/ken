@@ -206,6 +206,12 @@ async def test_tasks_status_reads_done_and_dropped_default_unchanged(tmp_path):
     every = {r["text"]: r["status"] for r in json.loads(await mcp_server.tasks(status="all"))["tasks"]}
     assert every == {"open one": "open", "done one": "done", "dropped one": "dropped"}
     assert "error" in json.loads(await mcp_server.tasks(status="later"))
+    # since: closed rows from that day on; open rows never filtered
+    tomorrow = datetime.fromtimestamp(now_ms() / 1000 + 86_400).strftime("%Y-%m-%d")
+    later = {r["text"] for r in json.loads(await mcp_server.tasks(status="all", since=tomorrow))["tasks"]}
+    assert later == {"open one"}
+    assert json.loads(await mcp_server.tasks(status="all", since="2000-01-01"))["tasks"] == json.loads(await mcp_server.tasks(status="all"))["tasks"]
+    assert "error" in json.loads(await mcp_server.tasks(status="done", since="soon"))
 
 
 async def test_events_in_a_date_window(tmp_path):

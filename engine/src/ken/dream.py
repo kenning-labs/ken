@@ -562,6 +562,7 @@ _ID_BEFORE_NAME = re.compile(r"(?:\b[Tt]asks?\s+)?\b((?=[0-9]*[a-f])[0-9a-f]{8,3
 # "task <id>" or a bare id: one pass, so a name put in is never scanned again
 _ANY_ID = re.compile(r"(?:\b[Tt]asks?\s+)?(\b(?=[0-9]*[a-f])[0-9a-f]{8,32}\b)")
 _KEEP = ("id", "record", "sources", "night", "closed")    # never shown as text, never rewritten
+_EXACT = ("quick", "add", "adds")    # sent back (a quick answer) or written as is (a fix): exact dates stay
 
 
 async def _task_names() -> list[tuple[str, str]]:
@@ -585,18 +586,19 @@ async def readable(value):
             cache[tok] = None if len(hits) != 1 else "\u201c" + (hits[0] if len(hits[0]) <= 70 else hits[0][:68].rstrip() + "\u2026") + "\u201d"
         return cache[tok]
 
-    def text(v: str) -> str:
+    def text(v: str, dates: bool) -> str:
         v = _ID_AFTER_NAME.sub(lambda m: m.group(1) if name(m.group(2)) else m.group(0), v)
         v = _ID_BEFORE_NAME.sub(lambda m: "" if name(m.group(1)) else m.group(0), v)
-        return plain_dates(_ANY_ID.sub(lambda m: name(m.group(1)) or m.group(0), v))
+        v = _ANY_ID.sub(lambda m: name(m.group(1)) or m.group(0), v)
+        return plain_dates(v) if dates else v
 
-    def walk(v):
+    def walk(v, dates=True):
         if isinstance(v, str):
-            return text(v)
+            return text(v, dates)
         if isinstance(v, list):
-            return [walk(x) for x in v]
+            return [walk(x, dates) for x in v]
         if isinstance(v, dict):
-            return {k: (x if k in _KEEP else walk(x)) for k, x in v.items()}
+            return {k: (x if k in _KEEP else walk(x, dates and k not in _EXACT)) for k, x in v.items()}
         return v
 
     def one(item):
@@ -610,8 +612,11 @@ async def readable(value):
             shown = display_name(rec)
             out["record"] = {**out["record"], "name": shown}
             out["title"] = ("Add to " if out.get("add") else "Link ") + shown
-            out["show"] = ({"question": f"Add this to {shown}?", "yes": "Yes, add it", "no": "Skip", "done": f"Added to {shown}"}
+            n = len(out.get("links") or [])
+            also = f", with {n} link{'s' if n > 1 else ''}" if out.get("add") and n else ""
+            out["show"] = ({"question": f"Add this to {shown}{also}?", "yes": "Yes, add it", "no": "Skip",
+                            "done": [f"Added to {shown}{also}", "Skipped it"]}
                            if out.get("add") else
-                           {"question": f"Link {shown}?", "yes": "Yes, link it", "no": "Skip", "done": f"Linked {shown}"})
+                           {"question": f"Link {shown}?", "yes": "Yes, link it", "no": "Skip", "done": [f"Linked {shown}", "Skipped it"]})
         return out
     return [one(i) for i in value] if isinstance(value, list) else one(value) if isinstance(value, dict) else walk(value)

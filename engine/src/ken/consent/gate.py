@@ -30,7 +30,7 @@ from ..contracts import (
 )
 from ..conversation import bus
 from ..memory import store
-from ..util import gone, new_id, norm, now_ms, owner_label, slug, stable_id, title_of, when_label
+from ..util import display_name, gone, new_id, norm, now_ms, owner_label, slug, stable_id, title_of, when_label
 from . import judge as _judge
 
 # Only these namespaces are low-stakes enough to apply without asking. Everything
@@ -114,7 +114,7 @@ def _card_label(target: str, existing: str | None) -> tuple[str, str | None]:
         return "Update " + _NOUN.get(target.split(":", 2)[1].split(".", 1)[0], "record"), None
     if target.startswith("links:"):                                # links:<record kind>: links only, the note stays
         rk = target.split(":", 1)[1]
-        return "Update " + _NOUN.get(rk.split(".", 1)[0], "record"), rk.split(".", 1)[-1].replace("_", " ").title()
+        return "Update " + _NOUN.get(rk.split(".", 1)[0], "record"), display_name(rk)
     if target.startswith("act:"):                                  # act:reply:<norm> → "Reply"
         verb = target.split(":", 2)[1].replace("_", " ")
         return {"mark done": "Mark done?", "discard": "Discard?", "reschedule": "Reschedule?", "assign": "Assign?",
@@ -123,8 +123,7 @@ def _card_label(target: str, existing: str | None) -> tuple[str, str | None]:
         return "Forget " + _NOUN.get(target.split(":", 1)[1].split(".", 1)[0], "note"), None
     ns = target.split(".", 1)[0]
     verb = "Update" if existing is not None else "Save"        # an existing value → a change, not a new save
-    subject = (target.split(".", 1)[-1].replace("_", " ").strip().title()
-               if ns in ("people", "projects") else None)      # named entities get a heading; topics don't
+    subject = display_name(target) if ns in ("people", "projects") else None   # named entities get a heading; topics don't
     return f"{verb} {_NOUN.get(ns, 'note')}", subject
 
 

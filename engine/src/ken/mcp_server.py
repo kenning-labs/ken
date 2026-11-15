@@ -38,7 +38,7 @@ from .contracts import Action, ActionKind, RenderableKind, link_sentence
 from .conversation import bus
 from .memory import store
 from .util import GLUE as _GLUE
-from .util import family_words, local_ms, new_id, norm, now_ms, owner_label, slug, title_of
+from .util import display_name, family_words, local_ms, new_id, norm, now_ms, owner_label, slug, title_of
 
 _MAX_TEXT = 2000
 _MAX_SOURCE = 60
@@ -222,8 +222,17 @@ def card_show(kind: str, subject: str | None, existing: str | None) -> dict:
     {question, yes, no, done: [if yes, if no]}. Any client can show it as is (the web page, a chat, a bot)."""
     def out(q, yes, no, did_yes, did_no):
         return {"question": q, "yes": yes, "no": no, "done": [did_yes, did_no]}
-    who = subject or "this"
+    if kind.startswith("identity:"):                  # identity:<target kind>:<own kind>; No asks again, as a new record
+        other = display_name(kind.split(":", 2)[1])
+        return out(f"Is this {other}?", "Yes, the same", "No, someone else", f"Added it to {other}",
+                   "Ken asks again, as a new record")
+    if kind.startswith("links:"):                     # links only; the note stays as it is
+        return out(f"Link {subject}?", "Yes, link it", "No, skip it", f"Linked {subject}", "Skipped it")
+    noun = gate._NOUN.get(kind.split(".", 1)[0], "note")
     if existing is not None:
+        if not subject:                               # a topic or a preference: say what kind of thing changes
+            return out(f"Update this {noun}?", "Yes, update", "No, keep it", f"Updated the {noun}", f"Kept the {noun}")
+        who = subject
         return out(f"Update what Ken knows about {who}?", "Yes, update", "No, keep it", f"Updated {who}", f"Kept {who} as it was")
     if kind.startswith("act:"):
         verb = kind.split(":", 2)[1]
@@ -238,7 +247,7 @@ def card_show(kind: str, subject: str | None, existing: str | None) -> dict:
         return out("Forget this?", "Forget it", "Keep it", "Forgot it", "Kept it")
     if subject:
         return out(f"Save this about {subject}?", "Yes, save it", "No, skip it", f"Saved it to {subject}", "Skipped it")
-    return out("Save this?", "Yes, save it", "No, skip it", "Saved it", "Skipped it")
+    return out(f"Save this {noun}?", "Yes, save it", "No, skip it", f"Saved the {noun}", "Skipped it")
 
 
 def render_card(c: dict) -> str:

@@ -35,17 +35,21 @@ The engine writes the words for you. Show them as they are. Do not build your ow
     Send the tapped answer, or the user's own words, with `inbox_chat {item_id, text}`. Ken carries it out and
     closes the item when it is decided.
   - `look`: worth knowing, no decision. Same shape, and a Dismiss button (`inbox_close {item_id, outcome}`).
-  - `tidy`: a fact for a person's or project's record. It has `show` like a card (`question`, `yes`, `no`, `done`)
-    and `add` (the text to add). Yes is `inbox_apply {item_id}`. Skip is `inbox_close {item_id, outcome: "skipped"}`.
+  - `tidy`: a fact for a person's or project's record. It has `show` like a card (`question`, `yes`, `no`,
+    `done: [if yes, if no]`) and `add` (the text to add, exactly as it will be written).
+    Yes is `inbox_apply {item_id}`. Skip is `inbox_close {item_id, outcome: "skipped"}`.
   - A closed item (`status: "closed"`) has `outcome`. Show it under "Answered".
 
 Without `readable: true` you get the ids, for an agent that acts on the tasks. A page wants `readable: true`.
 
 ## Read the answer of every write
 
-Every write returns `{outcome, text, …}`. Show `text`. These outcomes mean that nothing happened:
-`forbidden`, `error`, `busy`, `queued`, `blocked`, `not_saved`, `no_item`. Show them as a failure, and read the
-data again.
+Every write returns `{outcome, text, …}`. Show `text`.
+
+- `queued`: Ken has it and does it soon. It is not a failure. **Never send it again**: that makes a duplicate.
+- `forbidden`, `error`, `busy`, `blocked`, `not_saved`, `no_item`, `no_such_card`: nothing happened. Show it as a
+  failure, and read the data again.
+- `reasked` or `restaled` (from `decide`): Ken raised a new card in place of this one. Read `pending` again.
 
 After each answer, read `pending` and `inbox` again. The engine is the truth; do not keep your own copy.
 

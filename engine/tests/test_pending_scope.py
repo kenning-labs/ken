@@ -30,7 +30,9 @@ async def test_pending_shows_an_agent_only_the_cards_it_raised(tmp_path):
 
 async def test_an_id_right_before_its_name_is_dropped_not_doubled(tmp_path):
     tid, item = await _one_ask(tmp_path)
+    # a prefix with a letter in it: an all-digit token is never an id, and ~2% of ids start with 8 digits
+    short = next(tid[:n] for n in range(8, len(tid) + 1) if any(c in "abcdef" for c in tid[:n]))
     item["evidence"] = [f'Task {tid} "book the consulate appointment": status open',
-                        f"{tid[:8]}: “book the consulate appointment” is open"]
+                        f"{short}: “book the consulate appointment” is open"]
     out = await dream.readable(item)
     assert out["evidence"] == ['"book the consulate appointment": status open', "“book the consulate appointment” is open"]

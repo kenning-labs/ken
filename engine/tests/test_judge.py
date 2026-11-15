@@ -675,6 +675,13 @@ def test_decisions_is_on_by_default_and_openai_only():
     assert d is not None and d.model == "gpt-6-luna"
     assert build_decisions(on, {**key, "base_url": "https://api.openai.com/v1/"}) is not None
     assert build_decisions(on, {"provider": "openai"}) is None           # no key
+    # its own key: on whatever the main model is (DeepSeek here), off only when turned off
+    deepseek = {"api_key": "sk-ds", "base_url": "https://api.deepseek.com", "api_style": "chat"}
+    assert build_decisions({}, deepseek) is None                         # the main model's key is not OpenAI's
+    own = build_decisions({"api_key": "sk-openai"}, deepseek)
+    assert own is not None and own._key == "sk-openai" and own._url == "https://api.openai.com/v1"
+    assert build_decisions({"api_key": "sk-openai", "enabled": False}, deepseek) is None
+    assert build_decisions({"api_key": "YOUR_OPENAI_KEY"}, deepseek) is None   # the example placeholder
     assert build_decisions(on, {**key, "api_key": "YOUR_KEY"}) is None
     assert build_decisions(on, {**key, "base_url": "https://openrouter.ai/api/v1"}) is None
     assert build_decisions(on, {"provider": "claude-code"}) is None

@@ -2,7 +2,8 @@
 
 `POST /v1/decisions` over httpx (the installed openai SDK has no `decisions` resource).
 On by default whenever the LLM is OpenAI with a real `llm.api_key`; `decisions.enabled:
-false` turns it off, and any other provider or base_url leaves it off. `decide` never raises: an HTTP error, a timeout or
+false` turns it off, and any other provider or base_url leaves it off. Its own `decisions.api_key`
+keeps it on whatever the main model is (the main model on DeepSeek, the judge on OpenAI Decisions). `decide` never raises: an HTTP error, a timeout or
 a malformed reply is LOGGED and returns None, so each caller picks its own fallback.
 """
 from __future__ import annotations
@@ -49,15 +50,20 @@ class Decisions:
 
 
 def build_decisions(cfg: dict, llm_cfg: dict, *, transport=None) -> Decisions | None:
-    """A Decisions client when the LLM is OpenAI with a real key, unless `decisions.enabled`
-    is false (it is on by default); else None. Only an EXPLICIT `enabled: true` that cannot
-    work logs why: a claude-code or other provider stays off quietly."""
+    """A Decisions client when `decisions.api_key` is set, or else when the LLM is OpenAI with a
+    real key, unless `decisions.enabled` is false (it is on by default); else None. Only an
+    EXPLICIT `enabled: true` that cannot work logs why: a claude-code or other provider stays
+    off quietly."""
     raw = cfg.get("enabled", True)
     if isinstance(raw, str):                    # a quoted "false" / "off" means off too
         raw = raw.strip().lower() not in ("false", "off", "no", "0", "")
     explicit = raw is True and "enabled" in cfg
     if raw is False:
         return None
+    own = str(cfg.get("api_key") or "")
+    if own and not own.startswith("YOUR_"):          # its own key: the main model may be anything
+        return Decisions(own, base_url=str(cfg.get("base_url") or _OPENAI_URL),
+                         model=cfg.get("model") or DEFAULT_MODEL, transport=transport)
     key = str(llm_cfg.get("api_key") or "")
     base = str(llm_cfg.get("base_url") or _OPENAI_URL)
     provider = str(llm_cfg.get("provider") or "openai").lower()

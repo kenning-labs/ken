@@ -42,6 +42,7 @@ llm:
 # decisions:
 #   enabled: false        # turn it off
 #   model: "gpt-6-luna"
+#   api_key: "YOUR_OPENAI_API_KEY"   # its own OpenAI key: keeps Decisions on when llm is another provider (DeepSeek, Kimi…)
 
 
 # The Dreamer (optional, off by default): once a night it reads everything Ken holds with a

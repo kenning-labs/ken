@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+from urllib.parse import urlparse
 
 from . import config, db, registry
 from .agents.base import handle_slug
@@ -75,8 +76,10 @@ def discover_into(eng: Engine) -> Engine:
         if "llm" in params:
             model = resolve_model(llm_cfg, tier=cls.model_tier, agent=cls.__name__)
             # a chat-style host may reject reasoning_effort: only the responses API gets it here
+            # many chat-style hosts reject reasoning_effort; the responses API and DeepSeek take it
             chat = str(llm_cfg.get("api_style") or "responses") == "chat"
-            effort = llm_cfg.get("reasoning_effort") if cls.model_tier == "reasoning" and not chat else None
+            takes = not chat or urlparse(str(llm_cfg.get("base_url") or "")).hostname == "api.deepseek.com"
+            effort = llm_cfg.get("reasoning_effort") if cls.model_tier == "reasoning" and takes else None
             kwargs["llm"] = build_llm(llm_cfg, model=model, effort=effort)
         if "judge" in params:
             kwargs["judge"] = judge

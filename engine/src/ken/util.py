@@ -37,6 +37,36 @@ def title_of(kind: str) -> str:
     return kind.split(".", 1)[-1].replace("_", " ")
 
 
+def display_name(kind: str) -> str:
+    """A record's name as a heading reads it: a person's every word capitalized ('Artem Kuzmich'),
+    any other record's first letter ('Ken gtm'). Stored names stay lowercase keys; this is display only.
+    Every surface uses it: card subjects (gate) and Inbox fixes (dream)."""
+    t = title_of(kind)
+    return t.title() if kind.startswith("people.") else t[:1].upper() + t[1:]
+
+
+_SHORT_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+# the engine's own times are local (no offset); an offset, when a tool copied one, is dropped with the seconds
+_STAMP = re.compile(r"(^Event\s+)?\b(\d{4})-(\d\d)-(\d\d)(?:[T ](\d\d:\d\d)(?::\d\d(?:\.\d+)?)?(?:Z|[+-]\d\d:?\d\d)?)?\b")
+
+
+def plain_dates(text: str, year: int | None = None) -> str:
+    """Raw timestamps as a person says them: '2026-11-13T17:45' -> '13 Nov, 17:45', '2026-11-13' -> '13 Nov';
+    a year other than this one stays ('28 Oct 2025'). 'Event' at the start (the events tool's label, not the
+    user's word) goes with it. Not a real date ('2026-02-31'): left as it is. Display only."""
+    this_year = year or datetime.now().year  # noqa: DTZ005 — local, by design
+
+    def say(m: re.Match) -> str:
+        y, mo, d = int(m.group(2)), int(m.group(3)), int(m.group(4))
+        try:
+            datetime(y, mo, d)  # noqa: DTZ001 — a validity check only
+        except ValueError:
+            return m.group(0)
+        day = f"{d} {_SHORT_MONTHS[mo - 1]}" + ("" if y == this_year else f" {y}")
+        return f"{day}, {m.group(5)}" if m.group(5) else day
+    return _STAMP.sub(say, text)
+
+
 def owner_label(owner: str | None) -> str | None:
     """A task's owner as shown: None = the user; a person record by its title; else the name as given."""
     if not owner:

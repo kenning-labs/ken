@@ -36,7 +36,7 @@ async def test_every_shape_the_model_writes_reads_as_a_name(tmp_path):
                            f"Review it ({NAME}, from 4 Nov) and the PR {NAME}.",
                            f"Two are stale ({NAME}).",
                            "A Slack ts 1793138851.805299 and an unknown id 83c4b6b4 stay as they are."]
-    assert out["evidence"] == [f"{NAME}: created 2026-10-28", f"{NAME} (2026-10-05): open"]
+    assert out["evidence"] == [f"{NAME}: created 28 Oct", f"{NAME} (5 Oct): open"]      # dates as a person says them
     assert out["id"] == item["id"] and "links" not in out          # its own fields stay, and no field is added
     assert tid in json.dumps((await dream.get(item["id"]))["evidence"])   # storage keeps the ids
 
@@ -71,3 +71,49 @@ async def test_an_older_link_fix_gets_its_sentence_and_preview_the_right_way_rou
     out = await dream.readable(old)
     assert out["links"][0]["text"] == "sashko is the owner of emigration"
     assert out["preview"] == "sashko is the owner of emigration"
+
+
+def test_raw_timestamps_read_as_a_person_says_them():
+    from ken.util import plain_dates
+    assert plain_dates('Event 2026-11-13T17:45: "rent is fine"', 2026) == '13 Nov, 17:45: "rent is fine"'
+    assert plain_dates("deadline 2026-11-09T18:00:00+02:00, missed 2026-11-12", 2026) == "deadline 9 Nov, 18:00, missed 12 Nov"
+    assert plain_dates("created 2025-10-28", 2026) == "created 28 Oct 2025"                       # another year stays
+    assert plain_dates("2026-13-40, 2026-02-31 and 2026-11-00 stay", 2026) == "2026-13-40, 2026-02-31 and 2026-11-00 stay"
+    assert plain_dates("a calendar event 2026-11-13 was missed", 2026) == "a calendar event 13 Nov was missed"   # the user's word stays
+
+
+async def test_a_fix_names_its_record_as_a_heading_and_asks_a_question(tmp_path):
+    await _setup(tmp_path)
+    await store.upsert_structured(StructuredEntry(id="people.sashko", kind="people.sashko", subject="sashko", content="You.",
+                                                  provenance=Provenance.USER_STATED), change_note="test")
+    await dream.run_once(llm=FakeLLM({"tidy": [
+        {"kind": "project", "name": "emigration", "add": "", "link": {"kind": "person", "name": "sashko", "rel": "owner"}}]}))
+    (fix,) = await dream.items()
+    out = await dream.readable(fix)
+    assert out["title"] == "Link Emigration" and out["record"]["name"] == "Emigration"
+    assert out["record"]["id"] == fix["record"]["id"] and out["night"] == fix["night"]      # keys stay as stored
+    assert out["show"] == {"question": "Link Emigration?", "yes": "Yes, link it", "no": "Skip", "done": ["Linked Emigration", "Skipped it"]}
+    assert "show" not in fix and fix["title"] == "Link emigration"                          # an AI client gets the stored item
+
+
+def test_every_card_kind_asks_in_plain_words():
+    from ken.mcp_server import card_show
+    assert card_show("people.michael", "Michael", "iOS lead.") == {
+        "question": "Update what Ken knows about Michael?", "yes": "Yes, update", "no": "No, keep it",
+        "done": ["Updated Michael", "Kept Michael as it was"]}
+    assert card_show("act:discard:send the pr", None, None)["question"] == "Drop this task?"
+    assert card_show("task:book tickets", None, None)["yes"] == "Yes, add it"
+    assert card_show("people.nina", "Nina", None)["question"] == "Save this about Nina?"
+    assert card_show("act:something_new:x", None, None)["yes"] == "Yes"                    # an unknown act still reads
+    ident = card_show("identity:people.artem_kuzmich:people.artem_k", None, "Co-founder.")
+    assert ident["question"] == "Is this Artem Kuzmich?" and ident["done"][1] == "Ken asks again, as a new record"   # No re-asks
+    assert card_show("links:projects.ken_gtm", "Ken gtm", None)["done"][0] == "Linked Ken gtm"   # links only, no note
+    assert card_show("preferences.hours", None, "9 to 5")["question"] == "Update this preference?"
+
+
+async def test_quick_answers_and_the_text_a_fix_writes_keep_their_exact_dates(tmp_path):
+    _, item = await _one_ask(tmp_path)
+    item["quick"] = ["Move it to 2026-11-20"]
+    item["body"] = ["Due 2026-11-20."]
+    out = await dream.readable(item)
+    assert out["quick"] == ["Move it to 2026-11-20"] and "2026-11-20" not in out["body"][0]

@@ -270,7 +270,7 @@ def test_card_label_names_the_action_and_subject():
     assert _card_label("people.omar_haddad", None) == ("Save person", "Omar Haddad")
     assert _card_label("people.omar_haddad", "old note") == ("Update person", "Omar Haddad")
     assert _card_label("retire:people.dana", None) == ("Forget person", None)
-    assert _card_label("projects.crumbly_ios", None) == ("Save project", "Crumbly Ios")
+    assert _card_label("projects.crumbly_ios", None) == ("Save project", "Crumbly ios")
     assert _card_label("preferences.tone", None) == ("Save preference", None)   # a topic, no name heading
 
 

@@ -30,7 +30,7 @@ from .conversation import bus
 from .llm import build_llm, resolve_model
 from .memory import store
 from .tools.base import Tool
-from .util import new_id, norm, now_ms, slug, title_of
+from .util import display_name, new_id, norm, now_ms, plain_dates, slug, title_of
 
 CAP = 6                  # asks + looks a night, at most
 EXPIRE_DAYS = 7          # an item nobody answered closes itself after a week
@@ -69,6 +69,7 @@ How to work:
 - Never ask again about something in "Already raised" below, or something the user answered on a card.
 - At most {cap} items across asks and looks together, the most important first. Fewer is fine.
 - Write like a calm, sharp colleague: plain words, short sentences, no hype. Address the user as "you".
+  Use the user's words, not Ken's: "planned time", not "slot"; a record's name, not "(world)" or a tool's name.
 - Each ask has 2 or 3 quick answers you could carry out, the first one your recommendation.
 
 Reply with ONLY one JSON object:
@@ -560,7 +561,8 @@ _ID_AFTER_NAME = re.compile(r"([\"\u201d])\s*\(\s*(?:tasks?\s+)?(\b(?=[0-9]*[a-f
 _ID_BEFORE_NAME = re.compile(r"(?:\b[Tt]asks?\s+)?\b((?=[0-9]*[a-f])[0-9a-f]{8,32})\b:?\s+(?=[\"\u201c])")
 # "task <id>" or a bare id: one pass, so a name put in is never scanned again
 _ANY_ID = re.compile(r"(?:\b[Tt]asks?\s+)?(\b(?=[0-9]*[a-f])[0-9a-f]{8,32}\b)")
-_KEEP = ("id", "record", "sources")                       # never shown as text, never rewritten
+_KEEP = ("id", "record", "sources", "night", "closed")    # never shown as text, never rewritten
+_EXACT = ("quick", "add", "adds")    # sent back (a quick answer) or written as is (a fix): exact dates stay
 
 
 async def _task_names() -> list[tuple[str, str]]:
@@ -573,7 +575,9 @@ async def readable(value):
     inbox(readable=true); an AI client gets the ids and can act on them). Each task id the Dreamer cited
     becomes the task's quoted name; an id in brackets right after a quoted name is dropped. Unknown ids,
     other numbers and the item's own fields stay. A fix stored before link sentences existed gets them,
-    and its preview with them. One query for all task names, one pass per string."""
+    and its preview with them. Raw timestamps read as '13 Nov, 17:45'; a fix names its record as a heading
+    ('Ken gtm', 'Artem Kuzmich') and carries `show`: its question, button labels and the receipt text.
+    One query for all task names, one pass per string."""
     tasks, cache = await _task_names(), {}
 
     def name(tok: str) -> str | None:
@@ -582,18 +586,19 @@ async def readable(value):
             cache[tok] = None if len(hits) != 1 else "\u201c" + (hits[0] if len(hits[0]) <= 70 else hits[0][:68].rstrip() + "\u2026") + "\u201d"
         return cache[tok]
 
-    def text(v: str) -> str:
+    def text(v: str, dates: bool) -> str:
         v = _ID_AFTER_NAME.sub(lambda m: m.group(1) if name(m.group(2)) else m.group(0), v)
         v = _ID_BEFORE_NAME.sub(lambda m: "" if name(m.group(1)) else m.group(0), v)
-        return _ANY_ID.sub(lambda m: name(m.group(1)) or m.group(0), v)
+        v = _ANY_ID.sub(lambda m: name(m.group(1)) or m.group(0), v)
+        return plain_dates(v) if dates else v
 
-    def walk(v):
+    def walk(v, dates=True):
         if isinstance(v, str):
-            return text(v)
+            return text(v, dates)
         if isinstance(v, list):
-            return [walk(x) for x in v]
+            return [walk(x, dates) for x in v]
         if isinstance(v, dict):
-            return {k: (x if k in _KEEP else walk(x)) for k, x in v.items()}
+            return {k: (x if k in _KEEP else walk(x, dates and k not in _EXACT)) for k, x in v.items()}
         return v
 
     def one(item):
@@ -603,5 +608,15 @@ async def readable(value):
             out["links"] = [lk if lk.get("text") else {**lk, "text": _link_text(rec, lk)} for lk in out["links"]]
             if not out.get("add"):                        # a link-only fix: its preview is the link sentence
                 out["preview"] = out["links"][0]["text"][:160]
+        if rec and out.get("kind") == "tidy":             # the record by its display name, and the fix as a question
+            shown = display_name(rec)
+            out["record"] = {**out["record"], "name": shown}
+            out["title"] = ("Add to " if out.get("add") else "Link ") + shown
+            n = len(out.get("links") or [])
+            also = f", with {n} link{'s' if n > 1 else ''}" if out.get("add") and n else ""
+            out["show"] = ({"question": f"Add this to {shown}{also}?", "yes": "Yes, add it", "no": "Skip",
+                            "done": [f"Added to {shown}{also}", "Skipped it"]}
+                           if out.get("add") else
+                           {"question": f"Link {shown}?", "yes": "Yes, link it", "no": "Skip", "done": [f"Linked {shown}", "Skipped it"]})
         return out
     return [one(i) for i in value] if isinstance(value, list) else one(value) if isinstance(value, dict) else walk(value)

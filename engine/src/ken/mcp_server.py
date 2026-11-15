@@ -251,12 +251,15 @@ async def pending_count(conversation_id: str = bus.MAIN) -> int:
         return int((await cur.fetchone())[0])
 
 
-async def pending_cards(conversation_id: str = bus.MAIN) -> list[dict]:
+async def pending_cards(conversation_id: str = bus.MAIN, *, channel: str | None = None) -> list[dict]:
+    """The open cards, oldest first. `channel` (an agent token's caller tag): only the cards that channel's
+    own writes raised; None: every card (the user's view)."""
     async with db.get_db() as c:
         cur = await c.execute(
             "SELECT ask_id, kind, content, ask_type, author, action_id, meta, created_at, "
-            "origin, existing_snapshot, evidence FROM pending WHERE conversation_id=? ORDER BY created_at",
-            (conversation_id,))
+            "origin, existing_snapshot, evidence FROM pending WHERE conversation_id=?"
+            + (" AND raised_by=?" if channel is not None else "") + " ORDER BY created_at",
+            (conversation_id, *((channel,) if channel is not None else ())))
         rows = await cur.fetchall()
     out = []
     for r in rows:
@@ -1123,12 +1126,15 @@ def build_server():
         return await hydrate(items, source=source, provenance=provenance)
 
     @srv.tool(name="pending", description=(
-        "The open cards waiting for the user's decision: `title` (the action, e.g. Save person), `subject` "
+        "The open cards waiting for the user's decision (an agent token sees only the cards its own writes raised): "
+        "`title` (the action, e.g. Save person), `subject` "
         "(the named person/project when the question is only its description), `question`, and the "
         "evidence [{ref, source}]: show the "
         "user where a card came from (the source tag, the ref as a link when it is a URL) before they decide."))
     async def pending_tool() -> str:
-        return json.dumps(await pending_cards())
+        # an agent token sees only the cards its own writes raised; the user's token sees every card
+        mine = _caller() if _caller().startswith("mcp:agent") else None
+        return json.dumps(await pending_cards(channel=mine))
 
     @srv.tool(name="inbox", description=(
         "The Dreamer's Inbox: what its nightly read of Ken found. kind ask = needs the user's decision "

@@ -208,6 +208,39 @@ async def today(now: int | None = None) -> str:
 DIGEST_CARDS = 8                 # a phone push stays under ~4 KB (ntfy's message cap) at this many
 
 
+_ACT_SHOW = {   # act:<verb>: question, yes, no, done if yes, done if no
+    "discard": ("Drop this task?", "Drop it", "Keep it", "Dropped the task", "Kept the task"),
+    "mark_done": ("Mark this task done?", "Mark it done", "Not yet", "Marked it done", "Left it open"),
+    "reschedule": ("Move this task?", "Move it", "Leave it", "Moved the task", "Left it where it was"),
+    "assign": ("Hand this task over?", "Hand it over", "Keep it", "Handed it over", "Kept it"),
+    "link_tasks": ("Link these tasks?", "Link them", "No", "Linked them", "Left them apart"),
+}
+
+
+def card_show(kind: str, subject: str | None, existing: str | None) -> dict:
+    """What a card asks, in plain words, with buttons that name the action and the receipt each one gives:
+    {question, yes, no, done: [if yes, if no]}. Any client can show it as is (the web page, a chat, a bot)."""
+    def out(q, yes, no, did_yes, did_no):
+        return {"question": q, "yes": yes, "no": no, "done": [did_yes, did_no]}
+    who = subject or "this"
+    if existing is not None:
+        return out(f"Update what Ken knows about {who}?", "Yes, update", "No, keep it", f"Updated {who}", f"Kept {who} as it was")
+    if kind.startswith("act:"):
+        verb = kind.split(":", 2)[1]
+        return out(*_ACT_SHOW.get(verb, (gate._card_label(kind, None)[0], "Yes", "No", "Done", "Not done")))
+    if kind.startswith("task:"):
+        return out("Add this task?", "Yes, add it", "No, skip it", "Added the task", "Skipped the task")
+    if kind.startswith("event:"):
+        return out("Log this?", "Yes, log it", "No, skip it", "Logged it", "Skipped it")
+    if kind.startswith("batch:"):
+        return out("Save these?", "Save them", "Drop them all", "Saved them", "Dropped them")
+    if kind.startswith("retire:"):
+        return out("Forget this?", "Forget it", "Keep it", "Forgot it", "Kept it")
+    if subject:
+        return out(f"Save this about {subject}?", "Yes, save it", "No, skip it", f"Saved it to {subject}", "Skipped it")
+    return out("Save this?", "Yes, save it", "No, skip it", "Saved it", "Skipped it")
+
+
 def render_card(c: dict) -> str:
     """One card as plain lines, for the digest and `ken cards`: the title says what a Yes
     does (an update names the value it replaces), then the question, the note's first line,
@@ -278,6 +311,7 @@ async def pending_cards(conversation_id: str = bus.MAIN, *, channel: str | None 
                 "evidence": _evidence(store.evidence_load(r["evidence"])),
                 "at": _iso(r["created_at"]),
                 "answer": "decide(card_id, approved=true|false, edited='')"}
+        card["show"] = card_show(r["kind"], card["subject"], existing)
         if r["ask_type"] == "batch":
             card["items"] = meta.get("items") or []
             card["answer"] = ("ask keep / edit / drop per item, then decide(card_id, true, edited="
@@ -1130,7 +1164,9 @@ def build_server():
         "`title` (the action, e.g. Save person), `subject` "
         "(the named person/project when the question is only its description), `question`, and the "
         "evidence [{ref, source}]: show the "
-        "user where a card came from (the source tag, the ref as a link when it is a URL) before they decide."))
+        "user where a card came from (the source tag, the ref as a link when it is a URL) before they decide. "
+        "`show` = {question, yes, no, done: [if yes, if no]}: the card in plain words, button labels that name the "
+        "action, and the receipt each answer gives. A client can show it as is."))
     async def pending_tool() -> str:
         # an agent token sees only the cards its own writes raised; the user's token sees every card
         mine = _caller() if _caller().startswith("mcp:agent") else None
@@ -1140,7 +1176,8 @@ def build_server():
         "The Dreamer's Inbox: what its nightly read of Ken found. kind ask = needs the user's decision "
         "(quick = answers it suggests, the first its recommendation); kind look = worth knowing, no decision. "
         "Each item cites its evidence, with task ids you can act on. `status`: open (default) | closed (with the outcome) | all. "
-        "`readable`: true puts task names in place of ids, for a page that shows the items as they are. Show an open "
+        "`readable`: true puts task names in place of ids and dates in plain words, and gives each fix (tidy) its "
+        "`show` (question, button labels, receipt), for a page that shows the items as they are. Show an open "
         "item to the user, then record their answer with inbox_close."))
     async def inbox_tool(status: str = "open", readable: bool = False) -> str:
         from . import dream

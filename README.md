@@ -263,6 +263,7 @@ cron or launchd. Nothing waiting means nothing sent. Try it with `ken push --dry
 | `tell` | a free-text report; Ken turns it into the right writes |
 | `hydrate` | day zero: build your world in batches you confirm |
 | `pending`, `decide` | the open cards, and your answer to one |
+| `inbox`, `inbox_chat`, `inbox_apply`, `inbox_close` | what the Dreamer found overnight, and your answer |
 
 Every write returns the real outcome and the ids of any cards it raised, so an agent has the facts
 to tell you correctly what was saved.
@@ -287,7 +288,7 @@ key. **[Get early access →](https://kenninglabs.com/?ref=github)**
 | **Setup** | install, `ken init`, keep `ken` running | sign in with Google |
 | **Model** | your OpenAI key, Claude Code login or a local model | included |
 | **Connect claude.ai or ChatGPT** | a tunnel or reverse proxy you run | one URL |
-| **Web app** (your day, your world) | not included | included |
+| **Web app** (your day, your world) | not included; [build your own](DASHBOARD.md) | included |
 | **Updates** | `uv tool upgrade ken-engine` | we deploy them |
 
 What changes when we host it:

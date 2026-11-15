@@ -37,6 +37,26 @@ def title_of(kind: str) -> str:
     return kind.split(".", 1)[-1].replace("_", " ")
 
 
+def display_name(kind: str) -> str:
+    """A record's name as a heading reads it: a person's every word capitalized ('Artem Kuzmich'),
+    any other record's first letter ('Ken gtm'). Stored names stay lowercase keys; this is display only."""
+    t = title_of(kind)
+    return t.title() if kind.startswith("people.") else t[:1].upper() + t[1:]
+
+
+_SHORT_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_STAMP = re.compile(r"\b(?:[Ee]vent\s+)?(\d{4})-(\d\d)-(\d\d)(?:[T ](\d\d:\d\d)(?::\d\d(?:\.\d+)?)?(?:Z|[+-]\d\d:?\d\d)?)?\b")
+
+
+def plain_dates(text: str) -> str:
+    """Raw timestamps as a person says them: '2026-11-13T17:45' -> '13 Nov, 17:45', '2026-11-13' -> '13 Nov'.
+    A leading 'Event' (a tool's label, not the user's word) goes with it. Display only."""
+    def say(m: re.Match) -> str:
+        day = f"{int(m.group(3))} {_SHORT_MONTHS[int(m.group(2)) - 1]}"
+        return f"{day}, {m.group(4)}" if m.group(4) else day
+    return _STAMP.sub(lambda m: say(m) if 1 <= int(m.group(2)) <= 12 else m.group(0), text)
+
+
 def owner_label(owner: str | None) -> str | None:
     """A task's owner as shown: None = the user; a person record by its title; else the name as given."""
     if not owner:

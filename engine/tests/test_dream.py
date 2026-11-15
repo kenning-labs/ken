@@ -326,3 +326,5 @@ def test_a_chat_style_agent_never_gets_the_shared_effort(monkeypatch):
     assert eng.assistant._llm._effort is None                         # was sent before: a 400 on many hosts
     cfg["api_style"] = "responses"
     assert app.build_engine().assistant._llm._effort == "high"
+    cfg.update(api_style="chat", base_url="https://api.deepseek.com", reasoning_effort="max")   # DeepSeek takes it
+    assert app.build_engine().assistant._llm._effort == "max"

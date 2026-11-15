@@ -11,10 +11,16 @@ from .test_dream import FakeLLM, _ask, _setup
 NAME = "“book the consulate appointment”"
 
 
+def _short(tid: str) -> str:
+    """The shortest prefix of 8+ characters with a letter in it: an all-digit token is never taken
+    for an id (a Slack timestamp is not one), and about 2% of random ids start with 8 digits."""
+    return next(tid[:n] for n in range(8, len(tid) + 1) if any(c in "abcdef" for c in tid[:n]))
+
+
 async def _one_ask(tmp_path):
     task, _ = await _setup(tmp_path)                 # "book the consulate appointment"
     await dream.run_once(llm=FakeLLM({"asks": [_ask("x", f"Task {task.id}: created 2026-10-28",
-                                                    f"Tasks {task.id[:8]} (2026-10-05): open")]}))
+                                                    f"Tasks {_short(task.id)} (2026-10-05): open")]}))
     (item,) = await dream.items()
     return task.id, item
 
@@ -22,8 +28,8 @@ async def _one_ask(tmp_path):
 async def test_every_shape_the_model_writes_reads_as_a_name(tmp_path):
     tid, item = await _one_ask(tmp_path)
     item["body"] = [f'The task "book the consulate appointment" ({tid}) is open.',      # a name, then its id: dropped
-                    f"Review it (task {tid[:8]}, from 4 Nov) and the PR {tid[:8]}.",    # never lost: the name in its place
-                    f"Two are stale ({tid[:8]}).",
+                    f"Review it (task {_short(tid)}, from 4 Nov) and the PR {_short(tid)}.",    # never lost: the name in its place
+                    f"Two are stale ({_short(tid)}).",
                     "A Slack ts 1793138851.805299 and an unknown id 83c4b6b4 stay as they are."]
     out = await dream.readable(item)
     assert out["body"] == ['The task "book the consulate appointment" is open.',

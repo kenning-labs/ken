@@ -30,7 +30,18 @@ from ..contracts import (
 )
 from ..conversation import bus
 from ..memory import store
-from ..util import display_name, gone, new_id, norm, now_ms, owner_label, slug, stable_id, title_of, when_label
+from ..util import (
+    display_name,
+    gone,
+    new_id,
+    norm,
+    now_ms,
+    owner_label,
+    slug,
+    stable_id,
+    title_of,
+    when_label,
+)
 from . import judge as _judge
 
 # Only these namespaces are low-stakes enough to apply without asking. Everything

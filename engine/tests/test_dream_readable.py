@@ -112,7 +112,7 @@ def test_every_card_kind_asks_in_plain_words():
 
 
 async def test_quick_answers_and_the_text_a_fix_writes_keep_their_exact_dates(tmp_path):
-    tid, item = await _one_ask(tmp_path)
+    _, item = await _one_ask(tmp_path)
     item["quick"] = ["Move it to 2026-11-20"]
     item["body"] = ["Due 2026-11-20."]
     out = await dream.readable(item)

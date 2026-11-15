@@ -38,7 +38,17 @@ from .contracts import Action, ActionKind, RenderableKind, link_sentence
 from .conversation import bus
 from .memory import store
 from .util import GLUE as _GLUE
-from .util import display_name, family_words, local_ms, new_id, norm, now_ms, owner_label, slug, title_of
+from .util import (
+    display_name,
+    family_words,
+    local_ms,
+    new_id,
+    norm,
+    now_ms,
+    owner_label,
+    slug,
+    title_of,
+)
 
 _MAX_TEXT = 2000
 _MAX_SOURCE = 60

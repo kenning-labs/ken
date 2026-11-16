@@ -788,3 +788,54 @@ async def test_decisions_http_error_keeps_the_response_body():
     c = Decisions("sk-test", transport=httpx.MockTransport(lambda r: httpx.Response(400, json=err)))
     assert await c.decide([{"type": "predicate", "name": "p", "instructions": "x"}], "in") is None
     assert "400" in c.last_error and "array too short" in c.last_error and "sk-test" not in c.last_error
+
+
+async def test_jev_answers_the_same_questions_in_the_same_shapes():
+    """decisions.provider: jev — choice, predicate and score map to Jev's choice, noul and score, and the
+    answers come back as the judge and the ranker read them."""
+    import httpx
+
+    from ken.decisions import Jev, build_decisions
+    seen = {}
+
+    def handler(request):
+        seen["url"], seen["auth"], seen["body"] = str(request.url), request.headers["authorization"], json.loads(request.content)
+        return httpx.Response(200, json={"model": "jev-latest", "usage": {"input_tokens": 90, "output_tokens": 3}, "answers": {
+            "verdict": {"type": "choice", "choice": "collapse:t1", "confidence": 0.91, "probabilities": {"keep": 0.09, "collapse:t1": 0.91}},
+            "grounded": {"type": "noul", "noul": 0.97},
+            "s0": {"type": "score", "score": 1.7, "confidence": 0.6, "legend": {}, "probabilities": {}}}})
+    client = build_decisions({"provider": "jev", "api_key": "ts-test"}, {"api_key": "sk-x", "base_url": "https://api.deepseek.com"},
+                             transport=httpx.MockTransport(handler))
+    assert isinstance(client, Jev) and client.model == "jev-latest"
+    out = await client.decide([
+        {"type": "choice", "name": "verdict", "instructions": "pick", "choices": [
+            {"value": "keep", "description": "new"}, {"value": "collapse:t1", "description": "duplicates [t1]"}]},
+        {"type": "predicate", "name": "grounded", "instructions": "did the user say it?"},
+        {"type": "score", "name": "s0", "instructions": "how soon?", "levels": [
+            {"label": "someday", "description": "someday"}, {"label": "this week", "description": "this week"}]}],
+        {"user_message": "book it", "existing": []})
+    assert seen["url"] == "https://api.typesafe.ai/v1/systemone" and seen["auth"] == "Bearer ts-test"
+    q = seen["body"]["questions"]
+    assert q["verdict"] == {"type": "choice", "instructions": "pick", "criteria": {"keep": "new", "collapse:t1": "duplicates [t1]"}}
+    assert q["grounded"] == {"type": "noul", "instructions": "did the user say it?"}
+    assert q["s0"]["criteria"] == ["someday", "this week"] and seen["body"]["state"]["user_message"] == "book it"
+    assert out["verdict"]["choice"] == "collapse:t1" and out["verdict"]["confidence"] == 0.91
+    assert out["grounded"] == {"name": "grounded", "type": "predicate", "probability": 0.97}
+    assert out["s0"]["score"] == 1.7
+    assert out["verdict"]["type"] == "choice" and client.label == "jev"
+    # no key: off, never a crash; an HTTP error: None and the cause kept
+    assert build_decisions({"provider": "jev"}, {}) is None
+    # a typo in the provider never sends the key to OpenAI: off
+    assert build_decisions({"provider": "typesafe", "api_key": "ts-test"}, {}) is None
+    # values left over from OpenAI Decisions do not reach Jev
+    left = build_decisions({"provider": "jev", "api_key": "ts-test", "model": "gpt-6-luna", "base_url": "https://api.openai.com/v1"}, {})
+    assert left.model == "jev-latest" and left._url == "https://api.typesafe.ai/v1"
+    # one bad answer does not lose the others; a noul with no `type` field still reads as the predicate
+    part = Jev("k", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"answers": {
+        "verdict": {"choice": "keep", "confidence": 0.8}, "grounded": None, "g2": {"noul": 0.4}}})))
+    got = await part.decide([{"type": "choice", "name": "verdict", "instructions": "x", "choices": [{"value": "keep"}]},
+                             {"type": "predicate", "name": "grounded", "instructions": "x"},
+                             {"type": "predicate", "name": "g2", "instructions": "x"}], "plain text state")
+    assert got["verdict"]["type"] == "choice" and "grounded" not in got and got["g2"]["probability"] == 0.4
+    bad = Jev("k", transport=httpx.MockTransport(lambda r: httpx.Response(422, json={"detail": "bad"})))
+    assert await bad.decide([{"type": "predicate", "name": "g", "instructions": "x"}], "s") is None and "422" in bad.last_error

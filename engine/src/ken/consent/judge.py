@@ -211,7 +211,8 @@ class DecisionsJudge:
         g = (answers or {}).get("grounded") or {}
         grounded = g.get("probability") if g.get("type") == "predicate" else None
         verdict, _, target = choice.partition(":") if compare else ("keep", "", "")
-        reason = (f"decisions {conf:.2f}" if compare else "decisions nothing to compare") + (
+        who = getattr(self._client, "label", "decisions")      # decisions | jev: the audit says who judged
+        reason = (f"{who} {conf:.2f}" if compare else f"{who} nothing to compare") + (
             f" grounded {float(grounded):.2f}" if grounded is not None else "")
         return Decision(Verdict(verdict), target_id=target or None, reason=reason)
 

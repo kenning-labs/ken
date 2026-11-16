@@ -1,6 +1,6 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/header-dark.png">
-  <img alt="ken. A head drawn in dots, with small worlds, your agents, around it. The current state of your life, for every AI you use. Not what was said. What is true now." src=".github/assets/header-light.png" width="100%">
+  <img alt="ken. A head drawn in dots, with small worlds, your agents, around it. The current state of your life, for every AI you use. An open-source MCP server for Claude, ChatGPT and Cursor." src=".github/assets/header-light.png" width="100%">
 </picture>
 
 <p align="center">

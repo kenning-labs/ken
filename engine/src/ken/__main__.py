@@ -292,7 +292,7 @@ def _c(code: str, text: str) -> str:
     return f"\033[{code}m{text}\033[0m" if _color() else text
 
 
-_CLAY = "38;2;184;90;60"          # the brand clay, #B85A3C
+_ACCENT = "38;2;79;123;224"       # the brand blue for a terminal, #4F7BE0 (iron-gall #2751B8 is too dark on black)
 _MARKS = {"ok": ("32", "✓"), "no": ("31", "✗"), "note": ("33", "!"), "skip": ("2", "·")}
 _WORDMARK = ("██╗  ██╗███████╗███╗   ██╗", "██║ ██╔╝██╔════╝████╗  ██║", "█████╔╝ █████╗  ██╔██╗ ██║",
              "██╔═██╗ ██╔══╝  ██║╚██╗██║", "██║  ██╗███████╗██║ ╚████║", "╚═╝  ╚═╝╚══════╝╚═╝  ╚═══╝")
@@ -317,7 +317,7 @@ class _Step:
         def spin() -> None:
             frames, i = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", 0
             while not self._stop.is_set():
-                sys.stdout.write(f"\r  {_c(_CLAY, frames[i % 10])} {_c('1', self.title)} {_c('2', 'working…')}\033[K")
+                sys.stdout.write(f"\r  {_c(_ACCENT, frames[i % 10])} {_c('1', self.title)} {_c('2', 'working…')}\033[K")
                 sys.stdout.flush()
                 i += 1
                 time.sleep(0.08)
@@ -366,10 +366,10 @@ def _banner() -> None:
     if sys.stdout.isatty() and shutil.get_terminal_size((80, 24)).columns >= 40:
         bar = ("   ", "   ", "███", "███", "███", "   ")
         for row, b in zip(_WORDMARK, bar):
-            print(f"  {_c('1', row)} {_c(_CLAY, b)}")
+            print(f"  {_c('1', row)} {_c(_ACCENT, b)}")
         print(f"\n  the current state of your life, for every AI you use  {_c('2', f'· v{__version__}')}\n")
     else:
-        print(f"  {_c('1', 'ken')}{_c(_CLAY, '▮')}  the current state of your life, for every AI you use"
+        print(f"  {_c('1', 'ken')}{_c(_ACCENT, '▮')}  the current state of your life, for every AI you use"
               f"  {_c('2', f'· v{__version__}')}\n")
 
 
@@ -660,7 +660,7 @@ def _summary(running: bool, llm: dict, name: str | None, by_hand: str) -> None:
     for key, val in rows:
         print(f"    {_c('2', f'{key:<7}')} {val}")
     if len(steps) == 1:
-        print(f"\n  {_c(_CLAY, '→')} {steps[0]}")
+        print(f"\n  {_c(_ACCENT, '→')} {steps[0]}")
     else:
         print("\n  " + _c("1", "Next:") + "".join(f"\n    {i}. {s}" for i, s in enumerate(steps, 1)))
     print(f"\n  {_c('2', f'Cursor, Codex or any MCP client: add a stdio server that runs {_tilde(mcp)}')}\n")

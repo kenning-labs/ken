@@ -37,7 +37,8 @@ The engine writes the words for you. Show them as they are. Do not build your ow
   - `look`: worth knowing, no decision. Same shape, and a Dismiss button (`inbox_close {item_id, outcome}`).
   - `tidy`: a fact for a person's or project's record. It has `show` like a card (`question`, `yes`, `no`,
     `done: [if yes, if no]`) and `add` (the text to add, exactly as it will be written).
-    Yes is `inbox_apply {item_id}`. Skip is `inbox_close {item_id, outcome: "skipped"}`.
+    Yes is `inbox_apply {item_id}`. If the user changed the wording, send their version:
+    `inbox_apply {item_id, add: "…"}`. Skip is `inbox_close {item_id, outcome: "skipped"}`.
   - A closed item (`status: "closed"`) has `outcome`. Show it under "Answered".
 
 Without `readable: true` you get the ids, for an agent that acts on the tasks. A page wants `readable: true`.

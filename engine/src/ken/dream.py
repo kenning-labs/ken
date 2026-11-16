@@ -433,7 +433,7 @@ def _schema(**p) -> dict:
     return {"type": "object", "properties": {k: {"type": v} for k, v in p.items()}}
 
 
-def _sentences(text: str) -> list[str]:
+def sentences(text: str) -> list[str]:
     return [x for x in re.split(r"(?<=[.!?])\s+", text.strip()) if x]
 
 
@@ -527,15 +527,15 @@ async def chat(item_id: str, text: str, *, judge=None, action_id: str | None = N
         reply = " ".join(done) if done else ("Closed." if state["closed"] else "I have no answer to that. Try again.")
     thread.append({"role": "dreamer", "text": reply, "at": now_ms(), **({"actions": actions} if actions else {})})
     still_open = (await get(item_id) or {}).get("status") == "open"      # another client may have closed it meanwhile
-    patch = {"thread": thread}
+    fields = {"thread": thread}
     if state["fix"] is not None and still_open:
-        patch.update({"add": state["fix"], "adds": _sentences(state["fix"]), "preview": state["fix"][:160]})
-    await _patch(item_id, patch)
+        fields.update({"add": state["fix"], "adds": sentences(state["fix"]), "preview": state["fix"][:160]})
+    await patch(item_id, fields)
     closed = bool(state["closed"]) and still_open and await close(item_id, state["closed"])
     return {"reply": reply, "outcome": outcome or ("closed" if closed else "answered"), "closed": closed, "actions": actions}
 
 
-async def _patch(item_id: str, fields: dict) -> None:
+async def patch(item_id: str, fields: dict) -> None:
     async with _db.get_db() as c:
         r = await (await c.execute("SELECT body FROM dream_items WHERE id=?", (item_id,))).fetchone()
         if r is None:

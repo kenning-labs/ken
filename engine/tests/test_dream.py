@@ -328,3 +328,20 @@ def test_a_chat_style_agent_never_gets_the_shared_effort(monkeypatch):
     assert app.build_engine().assistant._llm._effort == "high"
     cfg.update(api_style="chat", base_url="https://api.deepseek.com", reasoning_effort="max")   # DeepSeek takes it
     assert app.build_engine().assistant._llm._effort == "max"
+
+
+async def test_apply_in_the_users_own_words(tmp_path):
+    """Ken Cloud's item talk: the user changed the wording, the client applies their version."""
+    from ken.engine import Engine
+    _, when = await _setup(tmp_path)
+    await dream.run_once(llm=FakeLLM({"tidy": [{"kind": "project", "name": "emigration",
+                                               "add": "The consulate requires a round-trip ticket.", "source": {"event": when}}]}))
+    (fix,) = await dream.items()
+    eng = Engine(); eng.register_agent(Assistant(llm=None), assistant=True)
+    out = await _pumped(eng, mcp_server.inbox_apply(fix["id"], "  A one-way ticket is enough,   per the 13 Nov email. "))
+    assert out["outcome"] == "applied", out
+    rec = next(e for e in await store.get_structured("projects.") if e.kind == "projects.emigration")
+    assert rec.content.endswith("A one-way ticket is enough, per the 13 Nov email.")
+    assert "round-trip" not in rec.content                           # the proposal is not written as well
+    (done,) = await dream.items("closed")
+    assert done["add"] == "A one-way ticket is enough, per the 13 Nov email." and done["outcome"] == "applied"

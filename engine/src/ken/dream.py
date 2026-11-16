@@ -527,18 +527,30 @@ async def chat(item_id: str, text: str, *, judge=None, action_id: str | None = N
         reply = " ".join(done) if done else ("Closed." if state["closed"] else "I have no answer to that. Try again.")
     thread.append({"role": "dreamer", "text": reply, "at": now_ms(), **({"actions": actions} if actions else {})})
     still_open = (await get(item_id) or {}).get("status") == "open"      # another client may have closed it meanwhile
-    patch = {"thread": thread}
-    if state["fix"] is not None and still_open:
-        patch.update({"add": state["fix"], "adds": _sentences(state["fix"]), "preview": state["fix"][:160]})
-    await _patch(item_id, patch)
+    fields = {"thread": thread, **(fix_fields(state["fix"]) if state["fix"] is not None and still_open else {})}
+    await _patch(item_id, fields)
     closed = bool(state["closed"]) and still_open and await close(item_id, state["closed"])
     return {"reply": reply, "outcome": outcome or ("closed" if closed else "answered"), "closed": closed, "actions": actions}
 
 
+def fix_fields(text: str) -> dict:
+    """A fix's sentences in new words: the fields an item stores for them (inbox_chat and inbox_apply)."""
+    return {"add": text, "adds": _sentences(text), "preview": text[:160]}
+
+
+async def set_fix(item_id: str, text: str) -> dict | None:
+    """Store the user's own version of a fix's sentences on its open item; the item as it now is, or None."""
+    await _patch(item_id, fix_fields(text))
+    return await get(item_id)
+
+
 async def _patch(item_id: str, fields: dict) -> None:
+    """Merge fields into an item's body: one write transaction, so two clients never undo each other."""
     async with _db.get_db() as c:
+        await c.execute("BEGIN IMMEDIATE")
         r = await (await c.execute("SELECT body FROM dream_items WHERE id=?", (item_id,))).fetchone()
         if r is None:
+            await c.rollback()
             return
         await c.execute("UPDATE dream_items SET body=? WHERE id=?",
                         (json.dumps({**json.loads(r["body"]), **fields}, ensure_ascii=False), item_id))

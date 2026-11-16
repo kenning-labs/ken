@@ -50,7 +50,7 @@ def discover_into(eng: Engine) -> Engine:
     judge_llm = build_llm(llm_cfg, model=resolve_model(llm_cfg, tier="fast", agent="Judge"))
     judge = LlmJudge(judge_llm) if judge_llm is not None else None
     # OpenAI Decisions: on by default with an OpenAI key (`decisions.enabled: false` turns it
-    # off; any other provider leaves it off). When on it is
+    # off; any other llm provider leaves it off). `decisions.provider: jev` = TypeSafe Jev. When on it is
     # the PRIMARY judge and the ranker; the LLM judge answers only when Decisions fails.
     decisions = build_decisions(config.section("decisions"), llm_cfg)
     rank = DecisionsRanker(decisions) if decisions is not None else None

@@ -822,7 +822,20 @@ async def test_jev_answers_the_same_questions_in_the_same_shapes():
     assert out["verdict"]["choice"] == "collapse:t1" and out["verdict"]["confidence"] == 0.91
     assert out["grounded"] == {"name": "grounded", "type": "predicate", "probability": 0.97}
     assert out["s0"]["score"] == 1.7
+    assert out["verdict"]["type"] == "choice" and client.label == "jev"
     # no key: off, never a crash; an HTTP error: None and the cause kept
     assert build_decisions({"provider": "jev"}, {}) is None
+    # a typo in the provider never sends the key to OpenAI: off
+    assert build_decisions({"provider": "typesafe", "api_key": "ts-test"}, {}) is None
+    # values left over from OpenAI Decisions do not reach Jev
+    left = build_decisions({"provider": "jev", "api_key": "ts-test", "model": "gpt-6-luna", "base_url": "https://api.openai.com/v1"}, {})
+    assert left.model == "jev-latest" and left._url == "https://api.typesafe.ai/v1"
+    # one bad answer does not lose the others; a noul with no `type` field still reads as the predicate
+    part = Jev("k", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"answers": {
+        "verdict": {"choice": "keep", "confidence": 0.8}, "grounded": None, "g2": {"noul": 0.4}}})))
+    got = await part.decide([{"type": "choice", "name": "verdict", "instructions": "x", "choices": [{"value": "keep"}]},
+                             {"type": "predicate", "name": "grounded", "instructions": "x"},
+                             {"type": "predicate", "name": "g2", "instructions": "x"}], "plain text state")
+    assert got["verdict"]["type"] == "choice" and "grounded" not in got and got["g2"]["probability"] == 0.4
     bad = Jev("k", transport=httpx.MockTransport(lambda r: httpx.Response(422, json={"detail": "bad"})))
     assert await bad.decide([{"type": "predicate", "name": "g", "instructions": "x"}], "s") is None and "422" in bad.last_error

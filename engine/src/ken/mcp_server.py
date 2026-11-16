@@ -854,14 +854,17 @@ async def _record_cards(kind: str) -> tuple[list[str], list[str]]:
     return mine, [r["ask_id"] for r in rows if r["ask_id"] not in mine]
 
 
-async def inbox_apply(item_id: str, add: str = "") -> str:
+async def inbox_apply(item_id: str, add: str | None = None) -> str:
     """Apply one proposed Inbox fix as the user's own instruction: remember() the note as it is NOW
     plus each added sentence it still lacks, with the fix's links, then approve the card(s) that
     write raised (the tap was the consent). Refused while someone else's card on the record is open
     (a second card on a record would replace the first). A card an earlier Apply left behind (Ken
     was busy) is approved, not a block. Success is read back from the record, never assumed.
-    `add`: the user's own version of the sentences, in place of the proposed ones; it is stored on
-    the item first, so the item shows what was applied and a retry applies the same words."""
+    `add`: the user's own version of the sentences, in place of the proposed ones (at most 1000
+    characters; empty is refused: a fix the user does not want is closed with inbox_close). It is stored
+    on the item first, even when the Apply is then blocked, so the item shows what was applied and a
+    retry applies the same words. A card an earlier Apply left behind holds the OLD words: it is declined,
+    and the new words are written. The fix's links stay (to drop one, skip the fix)."""
     from . import dream
     if _caller().startswith("mcp:agent"):
         return json.dumps({"outcome": "forbidden", "text": "the Inbox is the user's: an agent token cannot apply a fix"})
@@ -870,14 +873,20 @@ async def inbox_apply(item_id: str, add: str = "") -> str:
         return json.dumps({"outcome": "no_item", "text": f"no open fix {item_id!r} in the Inbox"})
     rec, kind = item["record"], item["record"]["id"]
     mine, theirs = await _record_cards(kind)
-    edited = " ".join(str(add or "").split())
-    if edited and not theirs and not mine:              # the user's words replace the proposal, before any write
-        fields = {"add": edited, "adds": dream.sentences(edited), "preview": edited[:160]}
-        await dream.patch(item_id, fields)
-        item = {**item, **fields}
+    if add is not None:                                 # the user's words replace the proposal, before any write
+        edited = " ".join(str(add).split())
+        if not edited:
+            return json.dumps({"outcome": "error", "text": "add is empty: to drop this fix, close it with inbox_close"})
+        if len(edited) > 1000:
+            return json.dumps({"outcome": "error", "text": "add is too long: keep a fix under 1000 characters"})
+        item = await dream.set_fix(item_id, edited) or item
+        for card_id in mine:                            # an earlier Apply's card holds the old words
+            await decide(card_id, False)
+        mine = []
     if theirs:
         return json.dumps({"outcome": "blocked", "text": f"a card about {rec['name']} waits in Ken wants to check: "
-                                                         "answer it first, then apply this fix"})
+                                                         "answer it first, then apply this fix"
+                                                         + (". Your wording is kept for then." if add is not None else "")})
     ns = kind.split(".", 1)[0]
     now = next((e for e in await store.get_structured(ns + ".") if e.kind == kind), None)
     if now is None:
@@ -1208,7 +1217,7 @@ def build_server():
         "they changed the wording); the item then shows what was applied. The user's tap is the consent, so nothing waits for a second yes. If an "
         "outside agent's card on the same record waits in pending, nothing changes: answer that card first. "
         "To skip a fix, use inbox_close. The user's token only."))
-    async def inbox_apply_tool(item_id: str, add: str = "") -> str:
+    async def inbox_apply_tool(item_id: str, add: str | None = None) -> str:
         return await inbox_apply(item_id, add)
 
     @srv.tool(name="inbox_close", description=(

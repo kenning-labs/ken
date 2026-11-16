@@ -345,3 +345,35 @@ async def test_apply_in_the_users_own_words(tmp_path):
     assert "round-trip" not in rec.content                           # the proposal is not written as well
     (done,) = await dream.items("closed")
     assert done["add"] == "A one-way ticket is enough, per the 13 Nov email." and done["outcome"] == "applied"
+
+
+async def test_an_edit_survives_a_block_and_replaces_an_earlier_applys_waiting_card(tmp_path):
+    """Review of #24: an edit blocked by an outside card is kept on the item for the retry; a card an
+    earlier Apply left (the OLD words) is declined, and the NEW words are written. Empty or huge: refused."""
+    from ken.agents.base import Proposal
+    from ken.consent import gate
+    from ken.contracts import Evidence
+    from ken.engine import Engine
+    _, when = await _setup(tmp_path)
+    await dream.run_once(llm=FakeLLM({"tidy": [{"kind": "project", "name": "emigration",
+                                               "add": "The consulate requires a round-trip ticket.", "source": {"event": when}}]}))
+    (fix,) = await dream.items()
+    for bad in ("   ", "x" * 1001):
+        assert json.loads(await mcp_server.inbox_apply(fix["id"], bad))["outcome"] == "error"
+    eng = Engine(); eng.register_agent(Assistant(llm=None), assistant=True)
+    # an outside agent's card holds the record: blocked, and the user's words are kept for the retry
+    await gate.apply(Proposal(intent="structured:projects.emigration", content="Moving to Spain instead.",
+                              evidence=[Evidence(ref="x", source="codex")]), conversation_id=bus.MAIN, author="codex")
+    out = json.loads(await mcp_server.inbox_apply(fix["id"], "A one-way ticket is enough."))
+    assert out["outcome"] == "blocked" and "kept" in out["text"]
+    assert (await dream.get(fix["id"]))["add"] == "A one-way ticket is enough."
+    (theirs,) = await mcp_server.pending_cards()
+    await _pumped(eng, mcp_server.decide(theirs["card_id"], False))
+    # an earlier Apply (Ken was busy) left a Dreamer card with the OLD words
+    await gate.apply(Proposal(intent="structured:projects.emigration", content="Old words: a round-trip ticket.",
+                              evidence=[Evidence(ref="dreamer:x", source="Dreamer")]), conversation_id=bus.MAIN, author="Dreamer")
+    out = await _pumped(eng, mcp_server.inbox_apply(fix["id"], "A one-way ticket is enough."))
+    assert out["outcome"] == "applied", out
+    rec = next(e for e in await store.get_structured("projects.") if e.kind == "projects.emigration")
+    assert "A one-way ticket is enough." in rec.content and "round-trip" not in rec.content
+    assert await mcp_server.pending_cards() == []

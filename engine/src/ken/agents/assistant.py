@@ -241,7 +241,7 @@ def _render_memory(ctx, *, mode: str = "full", msg: str = "") -> str:
         plan = _today_plan(ctx.tasks, ctx.now)
         if plan:
             lines.append("Today's plan (the slots booked for today, in order):")
-            lines += [f"  - {_hm(t.slot_start)}–{_hm(t.slot_start + t.slot_minutes * 60_000)} {t.text}" for t in plan]
+            lines += [f"  - {when_label(t.slot_start, ctx.now)} for {t.slot_minutes} min: {t.text}" for t in plan]
         else:
             lines.append("Today's plan: nothing is booked for today.")
     if ctx.structured:
@@ -281,26 +281,25 @@ def _render_memory(ctx, *, mode: str = "full", msg: str = "") -> str:
     return "\n".join(lines) if lines else "(nothing saved yet)"
 
 
-def _hm(ms: int) -> str:
-    return datetime.fromtimestamp(ms / 1000).strftime("%H:%M")  # noqa: DTZ006 — local, by design
-
-
 def _times(t, now: int) -> str:
-    """A task's two times as the model reads them: '(due Fri 6pm; planned today 17:05 for 20 min)'."""
+    """A task's two times as the model reads them: '(due Fri 6pm; planned Mon 5:05pm for 20 min)'.
+    One format (when_label) here and in Today's plan."""
     parts = []
     if t.deadline:
         parts.append(f"due {when_label(t.deadline, now)}")
-    start, mins = getattr(t, "slot_start", None), getattr(t, "slot_minutes", None)
-    if start and mins:
-        parts.append(f"planned {when_label(start, now)} for {mins} min")
+    if t.slot_start and t.slot_minutes:
+        parts.append(f"planned {when_label(t.slot_start, now)} for {t.slot_minutes} min")
     return f" ({'; '.join(parts)})" if parts else ""
 
 
 def _today_plan(tasks, now: int) -> list:
-    """The open tasks with a slot today, by start: the user's plan for the day."""
-    day = datetime.fromtimestamp(now / 1000).date()  # noqa: DTZ006 — local, by design
-    return sorted((t for t in tasks if getattr(t, "slot_start", None) and getattr(t, "slot_minutes", None)
-                   and datetime.fromtimestamp(t.slot_start / 1000).date() == day),  # noqa: DTZ006
+    """The open tasks with a slot on today, by start: the user's plan for the day. A slot that
+    began before midnight and runs into today counts."""
+    start = datetime.fromtimestamp(now / 1000).replace(hour=0, minute=0, second=0, microsecond=0)  # noqa: DTZ006
+    lo = int(start.timestamp() * 1000)
+    hi = lo + 86_400_000
+    return sorted((t for t in tasks if t.slot_start and t.slot_minutes
+                   and t.slot_start < hi and t.slot_start + t.slot_minutes * 60_000 > lo),
                   key=lambda t: t.slot_start)
 
 
@@ -531,9 +530,9 @@ class Assistant(Agent):
                  {"type": "object", "properties": {"task": {"type": "string"}, "reason": {"type": "string"}},
                   "required": ["task"]}, _rec("discard_task", cap.discard_task)),
             Tool("reschedule_task",
-                 "Change the time of an EXISTING task. Pass the task's text (or a "
-                 "distinctive part) and the new time as a local ISO 8601 datetime "
-                 "(e.g. 2026-08-17T18:00).",
+                 "Change the DEADLINE (by when) of an EXISTING task — not when the user works on it "
+                 "(that is schedule_task). Pass the task's text (or a distinctive part) and the new "
+                 "deadline as a local ISO 8601 datetime (e.g. 2026-08-17T18:00).",
                  {"type": "object", "properties": {
                      "task": {"type": "string"}, "when": {"type": "string"}},
                   "required": ["task", "when"]}, _rec("reschedule_task", cap.reschedule_task)),
@@ -541,10 +540,11 @@ class Assistant(Agent):
                  "Plan WHEN the user works on an EXISTING task (its slot): `start` = a local ISO 8601 datetime "
                  "(e.g. 2026-11-16T21:00), `minutes` = how long. An empty `start` takes it off the day. This "
                  "moves the plan, not the deadline: 'move my tasks to 9pm', 'push this to tomorrow morning' "
-                 "about planned work is schedule_task. Keep a task's minutes when you only move it.",
+                 "about planned work is schedule_task. To only move a slot, pass its current minutes (shown as "
+                 "'for N min').",
                  {"type": "object", "properties": {
                      "task": {"type": "string"}, "start": {"type": "string"}, "minutes": {"type": "integer"}},
-                  "required": ["task", "start"]}, _rec("schedule_task", cap.schedule_task)),
+                  "required": ["task", "start", "minutes"]}, _rec("schedule_task", cap.schedule_task)),
             Tool("link_tasks",
                  "Record that an EXISTING task waits on another: `task` can only start after `depends_on` "
                  "(each the task's text or a distinctive part). It reads as blocked until that one is closed. "

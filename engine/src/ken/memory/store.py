@@ -5,7 +5,6 @@ a derived freshness signal, not a gated belief edit. (AGENTS.md)
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime
 
 from .. import db as _db
@@ -18,7 +17,7 @@ from ..contracts import (
     Task,
     orient,
 )
-from ..util import GLUE, new_id, norm, now_ms, split_deadline
+from ..util import find_words, new_id, norm, now_ms, split_deadline
 
 # ── evidence serde (one shape, shared by the store and the consent gate) ────
 
@@ -399,13 +398,13 @@ async def find_tasks(query: str, *, include_done: bool = True, limit: int = 20) 
     """Text-search tasks, newest first. Unlike open_tasks, this reaches COMPLETED (and dropped)
     tasks when `include_done` — the on-demand lookup for "is that done?" that the bounded
     open-view preload cannot answer. A task matches when its text holds the query as a phrase,
-    or holds every word of it in any order, a plural matching its singular ('android voices
-    picker' finds 'update the Android voice picker UI'). An empty query matches nothing.
-    ponytail: a plural 's' is the only stemming; add a stemmer if real misses show up."""
+    or holds every searchable word of it in any order (find_words: the same words and light stem
+    as the MCP find; a word matches a word it starts, so 'voices' finds 'voice'). An empty query
+    matches nothing. ponytail: every row is tokenized per call; an index when a history outgrows it."""
     q = norm(str(query))
     if not q:
         return []
-    words = {_stem(w) for w in re.findall(r"[a-z0-9']+", q) if len(w) > 2 and w not in GLUE}
+    words = find_words(q)
     where = "" if include_done else " WHERE status='open'"
     async with _db.get_db() as c:
         cur = await c.execute(f"SELECT * FROM tasks{where} ORDER BY created_at DESC")
@@ -413,14 +412,11 @@ async def find_tasks(query: str, *, include_done: bool = True, limit: int = 20) 
 
     def hit(text: str) -> bool:
         t = norm(text)
-        return q in t or (bool(words) and words <= {_stem(w) for w in re.findall(r"[a-z0-9']+", t)})
+        if q in t:
+            return True
+        have = find_words(t)
+        return bool(words) and all(any(h.startswith(w) or w.startswith(h) for h in have) for w in words)
     return [_task(r) for r in rows if hit(r["text"])][:limit]
-
-
-def _stem(word: str) -> str:
-    """'voices' -> 'voice', "robert's" -> 'robert': a plural or a possessive reads as the word."""
-    word = word.replace("'", "")
-    return word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word
 
 
 def _event(r) -> Event:

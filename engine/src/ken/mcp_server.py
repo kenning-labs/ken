@@ -41,6 +41,7 @@ from .util import GLUE as _GLUE
 from .util import (
     display_name,
     family_words,
+    find_words,
     local_ms,
     new_id,
     norm,
@@ -144,7 +145,9 @@ async def _post(kind: ActionKind, text: str, *, meta: dict | None = None,
 
 async def reply_to(text: str, channel: str, timeout: float = 120.0) -> str:
     """Plain-text talk-and-wait for the phone Shortcut: kip's reply, or the card notice."""
-    body = await _post(ActionKind.MESSAGE, text, channel=channel, timeout=timeout)
+    # the user's own token (a phone Shortcut, a device) speaks as the user: it may move a slot they set by hand
+    meta = {"provenance": "user"} if channel == "mcp:user" else None
+    body = await _post(ActionKind.MESSAGE, text, channel=channel, meta=meta, timeout=timeout)
     return str(body.get("text") or (CARD_RAISED if body.get("cards") else NO_REPLY))
 
 
@@ -399,7 +402,7 @@ async def tasks(filter: str = "", now: int | None = None, status: str = "open", 
     lanes = await _lanes(all_open, now)
     f = (filter or "").strip().lower()
     notes = {e.kind: f"{title_of(e.kind)} {e.content}".lower() for e in await store.get_structured("projects.")}
-    words = _find_words(f)
+    words = find_words(f)
 
     def hit(t) -> bool:
         """The filter as a phrase in the text or project, or every word of it in the text, the
@@ -745,25 +748,6 @@ async def world(now: int | None = None, budget_chars: int = 60_000) -> str:
     return json.dumps(out)
 
 
-_FIND_SKIP = frozenset({"the", "and", "for", "with", "from", "what", "when", "who", "where", "which", "how",
-                        "does", "did", "was", "were", "are", "is", "has", "have", "had", "still", "now",
-                        "my", "our", "we", "you", "your", "about", "that", "this", "any", "all", "to", "of",
-                        "in", "on", "at", "by", "be", "do", "it", "a", "an"})
-
-
-def _find_words(query: str) -> list[str]:
-    """The query's searchable words: common words dropped, a light stem so 'booked' finds
-    'book' and 'tiles' finds 'tile'."""
-    out = []
-    for w in re.findall(r"[\w']+", norm(query)):
-        if w in _FIND_SKIP or len(w) < 3:
-            continue
-        for suf in ("ing", "ed", "es", "s"):
-            if len(w) > len(suf) + 3 and w.endswith(suf):
-                w = w[: -len(suf)]
-                break
-        out.append(w)
-    return list(dict.fromkeys(out))
 
 
 FIND_HINT = "nothing matched these words; tasks() and world() show everything Ken holds"
@@ -776,7 +760,7 @@ async def find(query: str) -> str:
     a hit holds at least one of the query's words, ranked by how many it holds; the exact
     phrase ranks first. 'kitchen budget' finds the project whose note states the budget."""
     q = norm(str(query))
-    words = _find_words(query)
+    words = find_words(query)
     if not q or not words:
         return json.dumps({"tasks": [], "events": [], "beliefs": [], "hint": FIND_HINT})
 

@@ -712,7 +712,7 @@ async def test_the_chat_sees_todays_plan_and_moves_a_slot_not_a_deadline(tmp_pat
     await Assistant(llm=llm).run(_ctx("postpone today to 9pm", tasks=tasks, now=now))
     shown = llm.seen[1][-1]["content"]
     assert "due Fri" in shown and "planned" in shown and "for 25 min" in shown
-    assert "Today's plan" in shown and "18:45–19:10 Add the 30-day refund page" in shown
+    assert "Today's plan" in shown and "for 25 min: Add the 30-day refund page" in shown
     assert "schedule_task" in {tl.name for tl in llm.seen[2]}
 
     call = ToolCallingLLM([("schedule_task", {"task": "refund page", "start": "2026-11-16T21:00", "minutes": 25})])
@@ -721,7 +721,7 @@ async def test_the_chat_sees_todays_plan_and_moves_a_slot_not_a_deadline(tmp_pat
     await Assistant(llm=call).run(mine)
     assert call.results[0].startswith("'Add the 30-day refund page' slotted")
     (moved,) = await store.open_tasks()
-    assert moved.slot_start == local(2026, 11, 16, 21, 0) and moved.deadline == fri
+    assert moved.slot_start == local(2026, 11, 16, 21, 0) and moved.slot_minutes == 25 and moved.deadline == fri
 
 
 
@@ -736,3 +736,5 @@ async def test_find_task_matches_words_in_any_order_and_a_plural(tmp_path):
     assert hit.id == tid and hit.status == "done"
     assert [t.text for t in await store.find_tasks("picker robert")] == [hit.text]
     assert await store.find_tasks("android bookmarks") == []          # every word, not any word
+    uk, _ = await store.add_task("купити новий ноутбук для Артема", Provenance.USER_STATED)
+    assert [t.id for t in await store.find_tasks("ноутбук Артем")] == [uk]     # any script, not only ASCII

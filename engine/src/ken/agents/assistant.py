@@ -124,9 +124,15 @@ _SYSTEM = (
     "link_tasks: when the user says one task can only start after another ('X waits on Y', 'X only after "
     "Y'), record it as a dependency between the two tasks; add a missing task first only if the user "
     "committed to it; remove=true when it no longer waits. "
-    "reschedule_task: change the time of a task the user already has — pass its text (or a "
+    "A task has TWO times: `due` (the deadline, by when) and `planned` (the slot, when the user "
+    "works on it). 'Today' means what is PLANNED or DUE today: read 'Today's plan' before you say "
+    "nothing is on today. reschedule_task moves the DEADLINE; schedule_task moves the PLAN (the slot). "
+    "When the user asks to move, postpone or push today's work, they mean the plan: schedule_task each "
+    "planned task, keeping its minutes, unless they name a deadline. "
+    "reschedule_task: change the deadline of a task the user already has — pass its text (or a "
     "distinctive part) and the new local ISO 8601 datetime; use this, not add_task, to MOVE "
-    "an existing timed task. find_task: look up a task by text INCLUDING completed ones — "
+    "an existing deadline. Before you say a task is NOT on the list, call find_task: it may be "
+    "done already, or named in other words. find_task: look up a task by text INCLUDING completed ones — "
     "your open-task list shows only open tasks, so use find_task to check whether something "
     "is already done; it reads only, it never changes anything. "
     "log_event: record something that HAPPENED — a past occurrence — with an optional "
@@ -230,9 +236,14 @@ def _render_memory(ctx, *, mode: str = "full", msg: str = "") -> str:
     index = mode == "index"
     lines: list[str] = []
     if ctx.tasks:
-        lines.append("Open tasks:")
-        lines += [f"  - {t.text}" + (f" (scheduled {when_label(t.deadline, ctx.now)})"
-                                     if t.deadline else "") for t in ctx.tasks]
+        lines.append("Open tasks (due = the deadline, by when; planned = the slot, when the user works on it):")
+        lines += [f"  - {t.text}" + _times(t, ctx.now) for t in ctx.tasks]
+        plan = _today_plan(ctx.tasks, ctx.now)
+        if plan:
+            lines.append("Today's plan (the slots booked for today, in order):")
+            lines += [f"  - {when_label(t.slot_start, ctx.now)} for {t.slot_minutes} min: {t.text}" for t in plan]
+        else:
+            lines.append("Today's plan: nothing is booked for today.")
     if ctx.structured:
         # people and projects are their own views (de-slugged names), so 'who is X?' / 'what's
         # the state of Y?' read clean rosters — not mixed anonymously among the user's own facts.
@@ -268,6 +279,28 @@ def _render_memory(ctx, *, mode: str = "full", msg: str = "") -> str:
         lines += [f"  - {_gist(e.summary, 160) if index else e.summary} ({when_label(e.at, ctx.now)})"
                   for e in ctx.events[:5]]
     return "\n".join(lines) if lines else "(nothing saved yet)"
+
+
+def _times(t, now: int) -> str:
+    """A task's two times as the model reads them: '(due Fri 6pm; planned Mon 5:05pm for 20 min)'.
+    One format (when_label) here and in Today's plan."""
+    parts = []
+    if t.deadline:
+        parts.append(f"due {when_label(t.deadline, now)}")
+    if t.slot_start and t.slot_minutes:
+        parts.append(f"planned {when_label(t.slot_start, now)} for {t.slot_minutes} min")
+    return f" ({'; '.join(parts)})" if parts else ""
+
+
+def _today_plan(tasks, now: int) -> list:
+    """The open tasks with a slot on today, by start: the user's plan for the day. A slot that
+    began before midnight and runs into today counts."""
+    start = datetime.fromtimestamp(now / 1000).replace(hour=0, minute=0, second=0, microsecond=0)  # noqa: DTZ006
+    lo = int(start.timestamp() * 1000)
+    hi = lo + 86_400_000
+    return sorted((t for t in tasks if t.slot_start and t.slot_minutes
+                   and t.slot_start < hi and t.slot_start + t.slot_minutes * 60_000 > lo),
+                  key=lambda t: t.slot_start)
 
 
 _REFRESH_CRON = "*/15 * * * *"   # republish the Today panel; says nothing
@@ -497,12 +530,21 @@ class Assistant(Agent):
                  {"type": "object", "properties": {"task": {"type": "string"}, "reason": {"type": "string"}},
                   "required": ["task"]}, _rec("discard_task", cap.discard_task)),
             Tool("reschedule_task",
-                 "Change the time of an EXISTING task. Pass the task's text (or a "
-                 "distinctive part) and the new time as a local ISO 8601 datetime "
-                 "(e.g. 2026-08-17T18:00).",
+                 "Change the DEADLINE (by when) of an EXISTING task — not when the user works on it "
+                 "(that is schedule_task). Pass the task's text (or a distinctive part) and the new "
+                 "deadline as a local ISO 8601 datetime (e.g. 2026-08-17T18:00).",
                  {"type": "object", "properties": {
                      "task": {"type": "string"}, "when": {"type": "string"}},
                   "required": ["task", "when"]}, _rec("reschedule_task", cap.reschedule_task)),
+            Tool("schedule_task",
+                 "Plan WHEN the user works on an EXISTING task (its slot): `start` = a local ISO 8601 datetime "
+                 "(e.g. 2026-11-16T21:00), `minutes` = how long. An empty `start` takes it off the day. This "
+                 "moves the plan, not the deadline: 'move my tasks to 9pm', 'push this to tomorrow morning' "
+                 "about planned work is schedule_task. To only move a slot, pass its current minutes (shown as "
+                 "'for N min').",
+                 {"type": "object", "properties": {
+                     "task": {"type": "string"}, "start": {"type": "string"}, "minutes": {"type": "integer"}},
+                  "required": ["task", "start", "minutes"]}, _rec("schedule_task", cap.schedule_task)),
             Tool("link_tasks",
                  "Record that an EXISTING task waits on another: `task` can only start after `depends_on` "
                  "(each the task's text or a distinctive part). It reads as blocked until that one is closed. "

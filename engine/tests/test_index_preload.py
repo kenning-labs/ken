@@ -17,7 +17,7 @@ WORLD = [
     _e("preferences.writing_style", "Write in Simplified Technical English. Always. " * 6),
     _e("facts.son", "Your son is Leo. He was born in 2019 and likes train sets."),
 ]
-CTX = SimpleNamespace(tasks=[SimpleNamespace(text="call Bram", deadline=None)], structured=WORLD, events=[], now=0)
+CTX = SimpleNamespace(tasks=[SimpleNamespace(text="call Bram", deadline=None, slot_start=None, slot_minutes=None)], structured=WORLD, events=[], now=0)
 
 
 def test_gist_is_the_first_sentence_clipped():

@@ -32,6 +32,27 @@ def norm(text: str) -> str:
 GLUE = frozenset({"for", "and", "the", "with", "from"})   # title words that name nothing
 
 
+FIND_SKIP = frozenset({"the", "and", "for", "with", "from", "what", "when", "who", "where", "which", "how",
+                        "does", "did", "was", "were", "are", "is", "has", "have", "had", "still", "now",
+                        "my", "our", "we", "you", "your", "about", "that", "this", "any", "all", "to", "of",
+                        "in", "on", "at", "by", "be", "do", "it", "a", "an"})
+
+
+def find_words(query: str) -> list[str]:
+    """The query's searchable words: common words dropped, a light stem so 'booked' finds
+    'book' and 'tiles' finds 'tile'."""
+    out = []
+    for w in re.findall(r"[\w']+", norm(query)):
+        if w in FIND_SKIP or len(w) < 3:
+            continue
+        for suf in ("ing", "ed", "es", "s"):
+            if len(w) > len(suf) + 3 and w.endswith(suf):
+                w = w[: -len(suf)]
+                break
+        out.append(w)
+    return list(dict.fromkeys(out))
+
+
 def title_of(kind: str) -> str:
     """'projects.recipes_in_app' -> 'recipes in app': the one name a record shows everywhere."""
     return kind.split(".", 1)[-1].replace("_", " ")

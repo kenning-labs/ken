@@ -17,7 +17,7 @@ from ..contracts import (
     Task,
     orient,
 )
-from ..util import new_id, norm, now_ms, split_deadline
+from ..util import find_words, new_id, norm, now_ms, split_deadline
 
 # ── evidence serde (one shape, shared by the store and the consent gate) ────
 
@@ -395,20 +395,28 @@ async def open_tasks() -> list[Task]:
 
 
 async def find_tasks(query: str, *, include_done: bool = True, limit: int = 20) -> list[Task]:
-    """Text-search tasks by a normalized substring of `query`, newest first. Unlike
-    open_tasks, this reaches COMPLETED (and dropped) tasks when `include_done` — the
-    on-demand lookup for "is that done?" that the bounded open-view preload cannot
-    answer. Generic substring match on norm(text); an empty query matches nothing."""
+    """Text-search tasks, newest first. Unlike open_tasks, this reaches COMPLETED (and dropped)
+    tasks when `include_done` — the on-demand lookup for "is that done?" that the bounded
+    open-view preload cannot answer. A task matches when its text holds the query as a phrase,
+    or holds every searchable word of it in any order (find_words: the same words and light stem
+    as the MCP find; a word matches a word it starts, so 'voices' finds 'voice'). An empty query
+    matches nothing. ponytail: every row is tokenized per call; an index when a history outgrows it."""
     q = norm(str(query))
     if not q:
         return []
+    words = find_words(q)
     where = "" if include_done else " WHERE status='open'"
     async with _db.get_db() as c:
         cur = await c.execute(f"SELECT * FROM tasks{where} ORDER BY created_at DESC")
         rows = await cur.fetchall()
-    hits = [_task(r)
-            for r in rows if q in norm(r["text"])]
-    return hits[:limit]
+
+    def hit(text: str) -> bool:
+        t = norm(text)
+        if q in t:
+            return True
+        have = find_words(t)
+        return bool(words) and all(any(h.startswith(w) or w.startswith(h) for h in have) for w in words)
+    return [_task(r) for r in rows if hit(r["text"])][:limit]
 
 
 def _event(r) -> Event:

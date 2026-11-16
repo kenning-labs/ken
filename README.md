@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/kenning-labs/ken/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/kenning-labs/ken/ci.yml?branch=main&style=flat-square&label=CI"></a>
-  <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-D97757?style=flat-square"></a>
+  <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-2751B8?style=flat-square"></a>
   <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-5A5650?style=flat-square">
 </p>
 

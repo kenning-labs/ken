@@ -695,3 +695,44 @@ async def test_a_report_on_a_task_frames_the_turn_and_returns_a_typed_result(tmp
     (ev,) = await store.recent_events(5)
     assert tid in {e.ref for e in ev.evidence} and "report" in {e.source for e in ev.evidence}
     assert await store.open_tasks() == []
+
+
+async def test_the_chat_sees_todays_plan_and_moves_a_slot_not_a_deadline(tmp_path):
+    """16 Nov: four GTM tasks were planned for today with a Friday deadline; Ken said nothing was on
+    today. The chat now reads both times, a 'Today's plan' block, and has schedule_task."""
+    from datetime import datetime
+    local = lambda *a: int(datetime(*a).timestamp() * 1000)  # noqa: DTZ001 — local times, as the engine reads them
+    await _setup(tmp_path)
+    now = local(2026, 11, 16, 18, 6)
+    fri = local(2026, 11, 20, 18, 0)
+    tid, _ = await store.add_task("Add the 30-day refund page", Provenance.USER_STATED, deadline=fri)
+    await store.set_slot(tid, local(2026, 11, 16, 18, 45), 25, "user")
+    tasks = await store.open_tasks()
+    llm = FakeLLM()
+    await Assistant(llm=llm).run(_ctx("postpone today to 9pm", tasks=tasks, now=now))
+    shown = llm.seen[1][-1]["content"]
+    assert "due Fri" in shown and "planned" in shown and "for 25 min" in shown
+    assert "Today's plan" in shown and "18:45–19:10 Add the 30-day refund page" in shown
+    assert "schedule_task" in {tl.name for tl in llm.seen[2]}
+
+    call = ToolCallingLLM([("schedule_task", {"task": "refund page", "start": "2026-11-16T21:00", "minutes": 25})])
+    mine = _ctx("postpone today to 9pm", tasks=tasks, now=now)
+    mine.provenance = Provenance.USER_STATED                   # the user's own words move a slot they set by hand
+    await Assistant(llm=call).run(mine)
+    assert call.results[0].startswith("'Add the 30-day refund page' slotted")
+    (moved,) = await store.open_tasks()
+    assert moved.slot_start == local(2026, 11, 16, 21, 0) and moved.deadline == fri
+
+
+
+async def test_find_task_matches_words_in_any_order_and_a_plural(tmp_path):
+    """16 Nov: 'android voices picker' did not find the done 'update the Android voice picker UI…', so Ken said
+    the task was not on the list. Every word in any order, a plural as its singular, done tasks included."""
+    await _setup(tmp_path)
+    tid, _ = await store.add_task("update the Android voice picker UI to Robert's latest design", Provenance.USER_STATED)
+    await store.complete_task(tid)
+    await store.add_task("add Kindle bookmarks on iOS", Provenance.USER_STATED)
+    (hit,) = await store.find_tasks("android voices picker")
+    assert hit.id == tid and hit.status == "done"
+    assert [t.text for t in await store.find_tasks("picker robert")] == [hit.text]
+    assert await store.find_tasks("android bookmarks") == []          # every word, not any word

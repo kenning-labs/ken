@@ -43,6 +43,11 @@ llm:
 #   enabled: false        # turn it off
 #   model: "gpt-6-luna"
 #   api_key: "YOUR_OPENAI_API_KEY"   # its own OpenAI key: keeps Decisions on when llm is another provider (DeepSeek, Kimi…)
+# The same job on TypeSafe's Jev (typesafe.ai): the same questions, its own key.
+# decisions:
+#   provider: jev
+#   api_key: "YOUR_TYPESAFE_API_KEY"
+#   model: "jev-latest"
 
 
 # The Dreamer (optional, off by default): once a night it reads everything Ken holds with a

@@ -37,6 +37,9 @@ OUTCOME = {"task": "added to your tasks", "task_exists": "already on your list",
            "judge_error": "I hit an error checking that, so I didn't save it",
            "refused": "not saved: the user said No to this before. Do not send it again; if the user now says "
                       "it themselves, send it as their own words",
+           "out_of_scope": "not saved: Ken keeps only what another agent would act on (a commitment, a current "
+                           "fact about the user's people, projects or documents, a standing instruction). This reads "
+                           "as a passing interest, a personal plan or a one-off. Do not send it again",
            "denied": "I can't record that from this source",
            "retired": "forgotten", "absent": "nothing saved under that name"}
 BATCH = 10                       # ponytail: a guess; the first real sweep sets it

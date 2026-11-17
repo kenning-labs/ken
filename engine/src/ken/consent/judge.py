@@ -120,6 +120,15 @@ _STATEMENT_ASK = ("For proposed statement k={k} only. `new`: the record does not
                   "already says it (same thing, same value). `contradicts:<i>`: a different value for the same thing "
                   "as stored statement i (more detail about the same value is `new`, not a contradiction). "
                   "`refused:<j>`: the same claim as refused statement j.")
+_SCOPE_ASK = (
+    "Ken keeps only what another AI agent would act on tomorrow. Is this proposed record IN SCOPE? "
+    "YES: a current fact about a person, project, document, account, price or date the user works with; "
+    "a standing instruction for how agents should do things for the user; anything the user explicitly "
+    "asked to be remembered. NO: a passing interest or taste; a fitness level, a training or diet plan; what "
+    "the user read, ate or watched; a product they are still choosing; advice or a plan an assistant gave; "
+    "a one-off evening or outing with no later effect.")
+_SCOPE_SYSTEM = _SCOPE_ASK + ' Reply with ONE JSON object and nothing else: {"in_scope": true|false}'
+SCOPE_FLOOR = 0.25       # out of scope only on a confident No (a yes-probability under this); unsure = keep
 MAX_STORED = 60          # stored statements compared in one question (the choice cap is 241)
 MAX_REFUSED = 20
 
@@ -150,6 +159,14 @@ class LlmJudge:
 
     def __init__(self, llm) -> None:
         self._llm = llm
+
+    async def in_scope(self, kind: str, text: str, *, message: str) -> bool:
+        prompt = json.dumps({"kind": kind, "proposed": text, "user_message": message or ""}, ensure_ascii=False)
+        try:
+            raw = await self._llm.complete(_SCOPE_SYSTEM, [{"role": "user", "content": prompt}])
+            return bool(json.loads(raw[raw.find("{"): raw.rfind("}") + 1])["in_scope"])
+        except Exception as exc:
+            raise JudgeError(f"judge gave no scope answer: {exc!r}") from exc
 
     async def statements(self, new: list[str], old: list[str], refused: list[str], *, record: str, message: str) -> list:
         old, refused = old[:MAX_STORED], refused[:MAX_REFUSED]
@@ -269,6 +286,14 @@ class DecisionsJudge:
             f" grounded {float(grounded):.2f}" if grounded is not None else "")
         return Decision(Verdict(verdict), target_id=target or None, reason=reason)
 
+    async def in_scope(self, kind: str, text: str, *, message: str) -> bool:
+        answers = await self._client.decide([{"type": "predicate", "name": "in_scope", "instructions": _SCOPE_ASK}],
+                                            {"kind": kind, "proposed": text, "user_message": message or ""})
+        p = ((answers or {}).get("in_scope") or {}).get("probability")
+        if p is None:
+            raise JudgeError(f"decisions judge failed: {getattr(self._client, 'last_error', None) or 'no answer'}")
+        return float(p) >= SCOPE_FLOOR
+
     async def statements(self, new: list[str], old: list[str], refused: list[str], *, record: str, message: str) -> list:
         """One choice question per proposed statement, all in one call."""
         old, refused = old[:MAX_STORED], refused[:MAX_REFUSED]
@@ -295,6 +320,13 @@ class FallbackJudge:
 
     def __init__(self, primary: Judge, fallback: Judge) -> None:
         self._primary, self._fallback = primary, fallback
+
+    async def in_scope(self, kind: str, text: str, *, message: str) -> bool:
+        try:
+            return await self._primary.in_scope(kind, text, message=message)
+        except Exception as exc:  # noqa: BLE001 — as __call__: any primary failure falls back
+            _log.warning("primary judge failed on scope, using the fallback: %r", exc)
+            return await self._fallback.in_scope(kind, text, message=message)
 
     async def statements(self, new, old, refused, *, record: str, message: str) -> list:
         try:

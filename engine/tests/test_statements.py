@@ -30,6 +30,13 @@ class Script:
         return [next((v for w, v in self.by.items() if w.replace("_", " ") in s), ("new", None)) for s in new]
 
 
+class Keep(Script):
+    """For a NEW record the whole-note judge still runs: it says keep."""
+    async def __call__(self, proposal, *, message, existing):
+        from ken.consent.judge import Decision, Verdict
+        return Decision(Verdict.KEEP)
+
+
 async def _world(tmp_path):
     db.configure(str(tmp_path / "ken.db"))
     await db.init_db()
@@ -156,3 +163,64 @@ async def test_a_judge_failure_is_loud_and_the_real_judges_answer_per_statement(
                                                              record="Pagewise", message="")
     assert got == [("contradicts", 0), ("new", None)]
     assert [c["value"] for c in seen["body"]["questions"][0]["choices"]] == ["new", "same:0", "contradicts:0"]
+
+
+async def test_a_refusal_follows_the_claim_to_another_record_and_a_no_on_a_plain_card_counts(tmp_path):
+    """The 17 Nov rerun: the false price was tried on a fact, then on the project, then as an event."""
+    await _world(tmp_path)
+    # an agent proposes a NEW fact record; the user says No on its (plain) card
+    out = await gate.apply(Proposal(intent="structured:facts.pagewise_price", content="The price is now 12 USD a month.",
+                                    provenance=Provenance.WORLD, evidence=[Evidence(ref="x", source="slack")]),
+                           conversation_id=bus.MAIN, author="slack", judge=Keep(), message="")
+    (card,) = await mcp_server.pending_cards()
+    assert out == "pending" and await gate.resolve(card["card_id"], approved=False, conversation_id=bus.MAIN) == "rejected"
+    assert await store.refused() == ["The price is now 12 USD a month."]
+    # the same claim, other words, on the PROJECT record: the judge sees the refusal from the other record
+    j, did = Script(confirmed=("refused", 0)), {}
+    assert await _write("Kim confirmed a price of 12 USD.", j, provenance=Provenance.WORLD, source="slack",
+                        details=did) == "refused"
+    assert j.calls[0]["refused"] == ["The price is now 12 USD a month."] and await _note() == NOTE
+    # and as a brand-new record under another name: refused before any card
+    j2 = Keep(confirmed=("refused", 0))
+    out = await gate.apply(Proposal(intent="structured:facts.price_update", content="Kim confirmed a price of 12 USD.",
+                                    provenance=Provenance.AGENT_INFERRED), conversation_id=bus.MAIN, author="slack",
+                           judge=j2, message="")
+    assert out == "refused" and await mcp_server.pending_cards() == []
+
+
+async def test_the_engine_checks_scope_when_a_record_is_created(tmp_path):
+    await _world(tmp_path)
+
+    class Scoped(Script):
+        def __init__(self, ok):
+            super().__init__()
+            self.ok, self.asked = ok, []
+
+        async def __call__(self, proposal, *, message, existing):
+            from ken.consent.judge import Decision, Verdict
+            return Decision(Verdict.KEEP)
+
+        async def in_scope(self, kind, text, *, message):
+            self.asked.append(kind)
+            return self.ok
+    no = Scoped(False)
+    run = Proposal(intent="structured:projects.running_plan", content="Kim can jog 10 minutes. Three run-walk sessions a week.",
+                   provenance=Provenance.USER_INSTRUCTED)
+    assert await gate.apply(run, conversation_id=bus.MAIN, author="kip", judge=no, message="") == "out_of_scope"
+    assert not [e for e in await store.get_structured("projects.") if e.kind == "projects.running_plan"]
+    yes = Scoped(True)
+    assert await gate.apply(run, conversation_id=bus.MAIN, author="kip", judge=yes, message="") == "applied"
+    # a person is never scope-checked; a record that exists is not checked again
+    await gate.apply(Proposal(intent="structured:people.nora", content="Nora leads design.", provenance=Provenance.USER_INSTRUCTED),
+                     conversation_id=bus.MAIN, author="kip", judge=no, message="")
+    assert no.asked == ["projects.running_plan"]
+    # the real judges: a confident No from the typed judge, a JSON answer from the LLM judge
+    def handler(request):
+        return httpx.Response(200, json={"answers": [{"name": "in_scope", "type": "predicate", "probability": 0.1}]})
+    from ken.decisions import Decisions
+    assert await DecisionsJudge(Decisions("sk", transport=httpx.MockTransport(handler))).in_scope("projects.x", "t", message="") is False
+
+    class LLM:
+        async def complete(self, system, messages, **_):
+            return '{"in_scope": true}'
+    assert await LlmJudge(LLM()).in_scope("projects.x", "t", message="") is True

@@ -424,7 +424,7 @@ async def _statements_apply(proposal, entry, *, conversation_id, author, judge, 
                           meta=meta, change_note=f"added by {author}", conn=c)
             await c.commit()
         if user:
-            await store.unrefuse(kind, adds + again)
+            await store.unrefuse(adds + again)
         counts["added"] = len(adds)
     items = ([] if direct else [{"op": "add", "text": s} for s in adds]) + repl
     if details is not None:
@@ -440,6 +440,40 @@ async def _statements_apply(proposal, entry, *, conversation_id, author, judge, 
     return "conflict" if repl else "pending"
 
 
+_SCOPED_NS = ("preferences", "facts", "projects")   # where junk lands; a person or a document is rarely junk
+
+
+async def _new_record_checks(proposal, kind: str, *, conversation_id, author, judge, message, details):
+    """Before a NEW record is judged: (1) a claim the user refused on ANY record is not saved here either,
+    unless the user says it themselves; (2) the engine checks scope: a record no agent would act on (a
+    passing interest, a training plan, advice from a chat) is not saved, whoever relays it. Returns the
+    proposal (maybe with refused statements removed) and a stop outcome, or None to go on."""
+    user = proposal.provenance in (Provenance.USER_INSTRUCTED, Provenance.USER_STATED)
+    try:
+        said_no = [] if user else await store.refused(kind)
+        if said_no:
+            new = sentences(proposal.content)
+            verdicts = await judge.statements(new, [], said_no, record=kind.split(".", 1)[-1].replace("_", " "),
+                                              message=message)
+            kept = [s for s, (word, _) in zip(new, verdicts) if word != "refused"]
+            if len(kept) < len(new):
+                if details is not None:
+                    details.update(added=0, asked=0, refused=len(new) - len(kept))
+                await _db.audit("refused_again", kind, f"{len(new) - len(kept)} statement(s) by {author}")
+                if not kept:
+                    return proposal, "refused"
+                proposal = replace(proposal, content=" ".join(kept))
+        if kind.split(".", 1)[0] in _SCOPED_NS and hasattr(judge, "in_scope") \
+                and not await judge.in_scope(kind, proposal.content, message=message):
+            await _db.audit("out_of_scope", kind, f"by {author}: {proposal.content[:200]}")
+            return proposal, "out_of_scope"
+    except Exception as exc:  # noqa: BLE001 — ANY judge failure is loud, never a write
+        await _error(conversation_id, "I could not check that safely, so I did not save it.")
+        await _db.audit("judge_error", proposal.intent, repr(exc))
+        return proposal, "judge_error"
+    return proposal, None
+
+
 async def _judged_apply(proposal, *, conversation_id, author, judge, message,
                         details=None) -> str:
     if proposal.intent.startswith("structured:") and hasattr(judge, "statements"):
@@ -448,6 +482,11 @@ async def _judged_apply(proposal, *, conversation_id, author, judge, message,
         if entry is not None and len(sentences(proposal.content)) <= MAX_STATEMENTS:
             return await _statements_apply(proposal, entry, conversation_id=conversation_id, author=author,
                                            judge=judge, message=message, details=details)
+        if entry is None:
+            proposal, stop = await _new_record_checks(proposal, kind, conversation_id=conversation_id, author=author,
+                                                      judge=judge, message=message, details=details)
+            if stop:
+                return stop
     existing = await _slice_for(proposal)
     try:
         decision = await judge(proposal, message=message, existing=existing)
@@ -962,6 +1001,8 @@ async def resolve(ask_id: str, *, approved: bool, conversation_id: str | None = 
         if p["ask_type"] == "statements":
             items = (json.loads(p["meta"]) if p["meta"] else {}).get("statements") or []
             await store.add_refused(p["kind"], [i["text"] for i in items], source=p["author"])
+        elif p["ask_type"] == "belief" and "." in p["kind"] and ":" not in p["kind"]:
+            await store.add_refused(p["kind"], sentences(p["content"]), source=p["author"])   # a No on a record card
         await _outcome_row(ask_id, p, approved=False)
         await _delete_pending(ask_id)
         await _db.audit("consent_reject", p["kind"], f"rejected by {author}")

@@ -433,17 +433,18 @@ async def add_refused(kind: str, statements: list[str], source: str = "", conn=N
         await c.commit()
 
 
-async def refused(kind: str, limit: int = 30) -> list[str]:
-    """The statements the user refused for one record, newest first."""
+async def refused(kind: str | None = None, limit: int = 20) -> list[str]:
+    """The statements the user refused, newest first: this record's first, then any record's. A claim the
+    user refused on one record is refused on every record (an agent must not retry it elsewhere)."""
     async with _db.get_db() as c:
-        cur = await c.execute("SELECT statement FROM refused WHERE kind=? ORDER BY at DESC LIMIT ?", (kind, limit))
-        return [r["statement"] for r in await cur.fetchall()]
+        cur = await c.execute("SELECT statement FROM refused ORDER BY (kind = ?) DESC, at DESC LIMIT ?", (kind or "", limit))
+        return list(dict.fromkeys(r["statement"] for r in await cur.fetchall()))
 
 
-async def unrefuse(kind: str, statements: list[str], conn=None) -> None:
-    """The user stated it themselves after all: it is no longer refused."""
+async def unrefuse(statements: list[str]) -> None:
+    """The user stated it themselves after all: it is no longer refused, on any record."""
     async with _db.get_db() as c:
-        await c.executemany("DELETE FROM refused WHERE kind=? AND norm=?", [(kind, norm(s)) for s in statements])
+        await c.executemany("DELETE FROM refused WHERE norm=?", [(norm(s),) for s in statements])
         await c.commit()
 
 

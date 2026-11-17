@@ -20,7 +20,7 @@
 <p align="center">
   <a href="#get-started"><b>Get started</b></a> &nbsp;·&nbsp;
   <a href="#ken-cloud">Ken Cloud</a> &nbsp;·&nbsp;
-  <a href="#benchmark-alpha">Benchmark</a> &nbsp;·&nbsp;
+  <a href="#benchmark-preview">Benchmark</a> &nbsp;·&nbsp;
   <a href="#faq">FAQ</a> &nbsp;·&nbsp;
   <a href="ARCHITECTURE.md">How it works</a> &nbsp;·&nbsp;
   <a href="https://github.com/kenning-labs/ken/discussions">Discussions</a>
@@ -302,38 +302,46 @@ What changes when we host it:
   events live for the web app. It stores no events.
 - **Moving to self-hosting:** ask us, and we hand you your SQLite file to run with `ken`.
 
-## Benchmark (alpha)
+## Benchmark (preview)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-dark.png">
-  <img alt="ken-bench score, alpha run: False reports stay out, at half the cost. Ken 87, a to-do file 70, mem0 39. Cost per scenario: Ken $0.62, to-do file $1.23, mem0 $1.37." src=".github/assets/bench-light.png" width="100%">
+  <img alt="ken-bench, preview run: false reports stay out. Planted false values that reached the store, mean per run: Ken 0, a to-do file 6.8, mem0 6.6. Current-state score: Ken 0.92, to-do file 0.89, mem0 0.87. Ken asks the user 53 questions in 16 weeks; the others ask nothing." src=".github/assets/bench-light.png" width="100%">
 </picture>
 
-**Alpha run, not proof.** 2 scenarios × 3 runs, written by us and used while fixing bugs. We will
-publish the scenarios, prompts, raw answers and grader, with a run on unseen scenarios and
-[Graphiti](https://github.com/getzep/graphiti) added, before these numbers mean more than direction.
+**A preview, and our own benchmark.** We wrote [ken-bench](https://github.com/kenning-labs/ken-bench)
+for the job Ken is built for: keeping one person's current state right while it changes. Read it
+as a check on that job, not as a neutral comparison.
 
-The job it tests is Ken's own: keeping a current world that several agents write to and apps read.
-Read it as a check on that job, not a neutral comparison. The same agent (`gpt-5.6-luna`) reads ~135k tokens of everyday chat into each system through that
-system's own tools; a second agent plants false reports; answers are graded against fixed keys. mem0
-is the open-source `mem0ai` 2.2.1 on the same model and `text-embedding-3-small`.
+Each scenario is 16 weeks of one person's life: 4 projects, about 25 tasks and about 137 changes,
+written as chats, emails and Slack messages. Dates move, tasks get done in other words, and other
+people report things that are not true. The same agent (DeepSeek V4.1 Flash) reports every day
+into each system through that system's own tools. At 4 checkpoints we ask what is true today.
+4 scenarios × 3 runs, on seeds we did not use while we built the benchmark.
 
-| Measure | Ken | to-do file | mem0 |
+| Mean per run | Ken | to-do file | mem0 |
 |---|---|---|---|
-| False-report safety: answers stay right after planted reports | **94** | 39 | 39 |
-| App readability: a plain program reads the tasks, no model | **89** | **89** | 0 |
-| Current-state answers | 77 | **83** | 77 |
-| **ken-bench score** (equal-weight mean) | **87** | 70 | 39 |
-| Cost per scenario, all model calls included | **$0.62** | $1.23 | $1.37 |
+| Planted false values found in the store | **0** | 6.8 | 6.6 |
+| Answers that repeat a planted false value | **0** | 1.8 | 1.3 |
+| Answers that give an out-of-date value | 1.0 | **0** | **0** |
+| **Current-state score**, all questions (0 to 1) | **0.92** | 0.89 | 0.87 |
+| · Which tasks are open? | **0.90** | 0.75 | 0.84 |
+| · Which tasks are due by a date? | **0.93** | 0.76 | 0.76 |
+| · Is this task done? (asked in other words) | 0.97 | **0.99** | 0.89 |
+| Yes/no questions put to the user in 16 weeks | 53 | 0 | 0 |
 
-- mem0 scores 0 on app readability by design: it stores free text, not records. Without that row
-  the score is Ken 86, to-do file 61, mem0 58.
-- Ken costs less because the agent sends it short typed writes and reads small typed answers. mem0
-  runs its own extraction model on every add; the to-do file is read and rewritten whole on every
-  update.
-- A well-kept to-do file still answers current-state questions better on these short histories.
-- This is not mem0's main job: mem0 is built for recall, and on recall questions over raw chat it
-  beat Ken in our earlier runs (95 vs 73).
+- **False reports stay out.** In 12 runs, no planted false value reached Ken's store. The to-do
+  file and mem0 each stored about 7 and repeated 1 to 3 in answers.
+- **The overall gap is small.** Ken leads the to-do file by 0.03, and the to-do file is ahead on
+  2 of the 4 scenarios. Most questions are easy for all three.
+- **Ken pays with questions:** about 3 a week, and the user says no to 4 in 10.
+- **Ken was wrong too.** It gave an old value about once per run, and in 6 of 12 runs it took an
+  errand that someone posted to a whole channel as the user's task.
+- mem0 is the open-source `mem0ai` 2.2.1. It is built for recall, not for this job.
+- No cost numbers in this preview.
+
+The full table, the method, the limits, the scenarios and every raw answer are in
+[ken-bench](https://github.com/kenning-labs/ken-bench).
 
 ## Privacy
 

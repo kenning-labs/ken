@@ -263,6 +263,9 @@ def card_show(kind: str, subject: str | None, existing: str | None) -> dict:
     return out(f"Save this {noun}?", "Yes, save it", "No, skip it", f"Saved the {noun}", "Skipped it")
 
 
+SCOPE = "What Ken holds: what another agent would act on tomorrow. A commitment the user made; a dated change to what is true or due; the people, projects and documents they work with, with their CURRENT facts (an owner, a date, a price); a standing instruction for agents. NOT: a passing interest, what they read, ate or watched, a choice they are still weighing, advice an assistant gave, a one-off with no later effect. Two tests before any write: will an agent do something differently because of this, and is it still true and useful in a month? One No = do not write it."
+
+
 def render_card(c: dict) -> str:
     """One card as plain lines, for the digest and `ken cards`: the title says what a Yes
     does (an update names the value it replaces), then the question, the note's first line,
@@ -334,6 +337,15 @@ async def pending_cards(conversation_id: str = bus.MAIN, *, channel: str | None 
                 "at": _iso(r["created_at"]),
                 "answer": "decide(card_id, approved=true|false, edited='')"}
         card["show"] = card_show(r["kind"], card["subject"], existing)
+        if r["ask_type"] == "statements":
+            # what would change, statement by statement: {op: add | replace, text, replaces?}
+            card["statements"] = meta.get("statements") or []
+            if len(card["statements"]) > 1:
+                card["answer"] = ("decide(card_id, true) keeps all; to drop some: edited='[{\"i\": 1, \"drop\": true}]' "
+                                  "(i = the statement's place, from 0); approved=false refuses all")
+            if existing is None:
+                card["show"] = {**card["show"], "question": f"Add this to {card['subject'] or 'the record'}?",
+                                "yes": "Yes, add it", "done": [f"Added to {card['subject'] or 'the record'}", "Not added"]}
         if r["ask_type"] == "batch":
             card["items"] = meta.get("items") or []
             card["answer"] = ("ask keep / edit / drop per item, then decide(card_id, true, edited="
@@ -977,7 +989,7 @@ def build_server():
                       "times: `deadline` = by when (only a deadline can be overdue) and `slot` = when the "
                       "user works on it (schedule_task, start + minutes). A task is a commitment the user "
                       "made or accepted; advice or how-to steps from a chat are not tasks unless the user "
-                      "says they will do them."))
+                      "says they will do them. " + SCOPE))
 
     @srv.tool(name="tasks", description=(
         "The place to look for anything due or open: the user's open tasks with their CURRENT "
@@ -1125,9 +1137,13 @@ def build_server():
                            provenance=provenance, ref=ref)
 
     @srv.tool(name="remember", description=(
-        "Save a belief: kind = preference | fact | person | project | asset. A new record in the user's "
-        "own words (provenance 'user') is saved at once; a change to a record, or an agent's own "
-        "words, is a card the user confirms. `name` = the topic or the entity; `note` = the COMPLETE statement. `links` = a "
+        "Save a belief: kind = preference (a standing instruction for agents, not a taste) | fact (a current "
+        "value an agent needs: a price, a date, an address, an account) | person | project | asset. `name` = the "
+        "topic or the entity; `note` = what to save, in whole sentences. For a record Ken already has, send only "
+        "what is NEW: Ken adds the statements the note lacks and never removes what is there. The user's own "
+        "words (provenance 'user') are added at once; an agent's words wait on a card (keep or drop per "
+        "statement); a different value for something stored is always a card that shows the two; a statement "
+        "the user refused before comes back as `refused` — do not send it again. `links` = a "
         "JSON list of {kind, name, rel} to records Ken already has (rel: member | owner | asset | "
         "part_of | client), e.g. a project's people or an asset's project. `url` for an asset (a sheet, "
         "a repo, a doc, a dashboard). `at` = when this was stated (local ISO); a note older than the "

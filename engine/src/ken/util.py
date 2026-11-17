@@ -58,6 +58,11 @@ def title_of(kind: str) -> str:
     return kind.split(".", 1)[-1].replace("_", " ")
 
 
+def sentences(text: str) -> list[str]:
+    """A note as its statements: split after . ! ? — the unit a record changes by."""
+    return [x.strip() for x in re.split(r"(?<=[.!?])\s+", str(text or "").strip()) if x.strip()]
+
+
 def display_name(kind: str) -> str:
     """A record's name as a heading reads it: a person's every word capitalized ('Artem Kuzmich'),
     any other record's first letter ('Ken gtm'). Stored names stay lowercase keys; this is display only.

@@ -68,8 +68,11 @@ _SYSTEM = (
     "someone's leave, a launch (e.g. 'Alex leaves for Portugal on the 26th') -> log_event with "
     "`when` = that date and `until` = when it stops mattering. NOT add_task unless the user "
     "must do something about it.\n"
-    "  * A CURRENT, durable fact or preference about the user -> remember_fact / "
-    "remember_preference (e.g. 'my dentist is Dr. Smith', 'I like mornings').\n"
+    "  * A CURRENT fact an agent needs to act for the user (an address, an account, a price, a name: "
+    "'my dentist is Dr. Smith') -> remember_fact. A STANDING INSTRUCTION for how agents should do things "
+    "for them ('never book me before 10', 'write to me in short sentences') -> remember_preference. "
+    "A taste, an interest, a mood, a fitness level, a product they are choosing between, how their week "
+    "is going -> NOTHING: just reply.\n"
     "  * WHO A WORK/SOCIAL PERSON in their world is -> remember_person (e.g. 'Dana is my "
     "manager', 'my cofounder is Sam', 'Priya leads design'). A colleague, manager, "
     "collaborator, or contact — NOT the user, and NOT family (a family fact like 'my "
@@ -156,8 +159,14 @@ _SYSTEM = (
     "they ask you to track or remind them. Put in the task only the action the user said; never add a step they "
     "did not state (they said 'I'll find the file': not 'find the file and send it to Ines'). When "
     "unsure, do not add the task.\n"
-    "- Capture only what is clearly durable and worth keeping — not every passing remark. "
-    "When in doubt, just reply; do not capture.\n"
+    "- Capture only what another agent would act on tomorrow: a commitment, a dated change to what is true "
+    "or due, a person, project or document the user works with and its CURRENT facts, a standing instruction. "
+    "NOT a passing interest, what they read, ate or watched, a choice they are still weighing, advice you or "
+    "another assistant gave, a one-off with no later effect: for those, just reply. Two tests: will an agent do "
+    "something differently because of this, and is it still true and useful in a month? One No = do not capture.\n"
+    "- To add to a record you already hold, pass only the NEW sentence(s): they are added to the note, and "
+    "nothing there is removed. remember_preference is for a standing instruction (how agents should do "
+    "things for the user), not a taste.\n"
     "- If a message clarifies that a NAME is a place, company, product or thing — not a "
     "person — remember_fact it under that name (topic 'Portugal', fact 'Portugal is a country; the "
     "travel destination'), so it is never asked about again.\n"
@@ -477,16 +486,18 @@ class Assistant(Agent):
                  {"type": "object", "properties": {"task": {"type": "string"}, "owner": {"type": "string"}},
                   "required": ["task", "owner"]}, _rec("assign_task", cap.assign_task)),
             Tool("remember_preference",
-                 "Save how the user likes things — a standing taste, habit or rule (saved quietly, "
-                 "no confirmation). NOT what they own, bought or did: that is remember_fact or "
-                 "log_event. topic is a short key, detail is the preference.",
+                 "Save a STANDING INSTRUCTION: a rule for how agents should do things for the user, that "
+                 "they said should hold from now on ('never book me before 10'). NOT a taste, an interest, "
+                 "what they lean toward, or what they own, bought or did. topic is a short key, detail is "
+                 "the instruction.",
                  {"type": "object", "properties": {
                      "topic": {"type": "string"}, "detail": {"type": "string"}},
                   "required": ["topic", "detail"]}, _rec("remember_preference", _remember_preference)),
             Tool("remember_fact",
-                 "Save a personal fact about the user; they are shown a Yes/No card to "
-                 "confirm. topic is a short key; fact is the COMPLETE statement to confirm "
-                 "and store, e.g. \"your son's name is Leo\".",
+                 "Save a CURRENT fact an agent needs to act for the user (a name, an address, an account, "
+                 "a price, a date). NOT how they feel, what they are into, their fitness or a plan an "
+                 "assistant suggested. topic is a short key; fact is a complete statement, e.g. "
+                 "\"your son's name is Leo\".",
                  {"type": "object", "properties": {
                      "topic": {"type": "string"}, "fact": {"type": "string"}},
                   "required": ["topic", "fact"]}, _rec("remember_fact", _remember_fact)),

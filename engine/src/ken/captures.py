@@ -35,6 +35,8 @@ OUTCOME = {"task": "added to your tasks", "task_exists": "already on your list",
            "collapsed": "already saved — nothing new to add",
            "conflict": "that differs from what I have — I've put up a card to confirm",
            "judge_error": "I hit an error checking that, so I didn't save it",
+           "refused": "not saved: the user said No to this before. Do not send it again; if the user now says "
+                      "it themselves, send it as their own words",
            "denied": "I can't record that from this source",
            "retired": "forgotten", "absent": "nothing saved under that name"}
 BATCH = 10                       # ponytail: a guess; the first real sweep sets it
@@ -542,12 +544,22 @@ class Captures:
         meta = {"links": resolved} if resolved else {}
         if url:
             meta["url"] = str(url).strip()
-        out = await self._propose(f"structured:{kind_id}", note, meta=meta or None)
+        did: dict = {}
+        out = await self._propose(f"structured:{kind_id}", note, meta=meta or None, details=did)
         if out == "applied" and at_ms is not None:
             await store.stamp_structured(kind_id, at_ms)
         if out == "collapsed" and resolved:
             notes.insert(0, f"{len(resolved)} link(s) saved onto the existing record")
         tail = (" — " + "; ".join(notes)) if notes else ""
+        if "asked" in did:                 # the statement path: say exactly what landed and what waits
+            parts = [f"added {did['added']} new statement(s) to '{name}'"] if did.get("added") else []
+            if did.get("asked"):
+                parts.append("a different value for something stored waits on a card" if out == "conflict"
+                             else f"{did['asked']} new statement(s) wait on a card")
+            if did.get("refused"):
+                parts.append(f"{did['refused']} left out: the user said No to it before")
+            if parts:
+                return CaptureResult("; ".join(parts) + tail, out)
         if out == "applied" and had is not None and norm(had.content) != norm(note):
             # a fast-track write onto an existing key REPLACES it: say so, never "saved"
             return CaptureResult(f"saved — this replaced your earlier note on '{name}' (the old one is kept in its history){tail}", out)

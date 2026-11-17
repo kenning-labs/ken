@@ -419,6 +419,34 @@ async def find_tasks(query: str, *, include_done: bool = True, limit: int = 20) 
     return [_task(r) for r in rows if hit(r["text"])][:limit]
 
 
+async def add_refused(kind: str, statements: list[str], source: str = "", conn=None) -> None:
+    """Remember statements the user refused for one record (a No on a card, or a dropped item)."""
+    rows = [(kind, s, norm(s), source, now_ms()) for s in statements if norm(s)]
+    if not rows:
+        return
+    sql = "INSERT OR REPLACE INTO refused (kind, statement, norm, source, at) VALUES (?,?,?,?,?)"
+    if conn is not None:
+        await conn.executemany(sql, rows)
+        return
+    async with _db.get_db() as c:
+        await c.executemany(sql, rows)
+        await c.commit()
+
+
+async def refused(kind: str, limit: int = 30) -> list[str]:
+    """The statements the user refused for one record, newest first."""
+    async with _db.get_db() as c:
+        cur = await c.execute("SELECT statement FROM refused WHERE kind=? ORDER BY at DESC LIMIT ?", (kind, limit))
+        return [r["statement"] for r in await cur.fetchall()]
+
+
+async def unrefuse(kind: str, statements: list[str], conn=None) -> None:
+    """The user stated it themselves after all: it is no longer refused."""
+    async with _db.get_db() as c:
+        await c.executemany("DELETE FROM refused WHERE kind=? AND norm=?", [(kind, norm(s)) for s in statements])
+        await c.commit()
+
+
 def _event(r) -> Event:
     return Event(id=r["id"], summary=r["summary"], at=r["at"], provenance=Provenance(r["provenance"]),
                  evidence=evidence_load(r["evidence"]), until=r["until"])

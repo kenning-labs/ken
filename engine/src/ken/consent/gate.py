@@ -37,6 +37,7 @@ from ..util import (
     norm,
     now_ms,
     owner_label,
+    sentences,
     slug,
     stable_id,
     title_of,
@@ -339,8 +340,114 @@ def _reporter(proposal) -> str:
     return src if src and not src.startswith(("mcp:", "http:", "cli:")) else "an agent"
 
 
+MAX_STATEMENTS = 12      # more new statements than this in one write: the whole-note path (a card) decides
+
+
+async def _append(kind: str, adds: list[str], replaces: list[tuple[str, str]], *, provenance, evidence: list,
+                  meta: dict, change_note: str, conn) -> bool:
+    """Add statements to a record's note, and swap a contradicted statement for its new one. Nothing else
+    in the note changes. False when the record is gone."""
+    cur = next((e for e in await store.get_structured(kind) if e.kind == kind), None)
+    if cur is None:
+        return False
+    content = cur.content
+    for old, new in replaces:
+        content = content.replace(old, new, 1) if old and old in content else content.rstrip() + " " + new
+    for s in adds:
+        if norm(s) not in norm(content):
+            content = content.rstrip() + " " + s
+    await store.upsert_structured(StructuredEntry(
+        id=kind, kind=kind, subject=cur.subject, content=content, evidence=evidence, confidence=cur.confidence,
+        provenance=provenance, url=meta.get("url") or cur.url), change_note=change_note, conn=conn)
+    await _write_links(kind, meta, evidence, conn=conn)
+    return True
+
+
+async def _statements_apply(proposal, entry, *, conversation_id, author, judge, message, details) -> str:
+    """A write to a record that EXISTS, statement by statement (the note is never rewritten whole):
+    a statement the record already holds is skipped; a new one from the user is added with no card; a new
+    one from an agent or outside text goes on one card (keep or drop per statement); a statement that
+    contradicts a stored one is always a card that shows just the two; a statement the user refused before
+    is refused again for anyone but the user. `details` gets {added, asked, refused}."""
+    kind, meta = entry.kind, getattr(proposal, "meta", None) or {}
+    held = norm(entry.content)
+    new = list(dict.fromkeys(s for s in sentences(proposal.content) if norm(s) and norm(s) not in held))
+    user = proposal.provenance in (Provenance.USER_INSTRUCTED, Provenance.USER_STATED)
+    counts = {"added": 0, "asked": 0, "refused": 0}
+    verdicts = []
+    if new:
+        said_no = await store.refused(kind)
+        if not user:                                   # the exact words the user refused: no model needed
+            keep = [s for s in new if norm(s) not in {norm(r) for r in said_no}]
+            counts["refused"] += len(new) - len(keep)
+            new = keep
+    if new:
+        try:
+            verdicts = await judge.statements(new, sentences(entry.content), said_no,
+                                              record=_title_of(entry), message=message)
+        except Exception as exc:  # noqa: BLE001 — ANY judge failure is loud, never a write
+            await _error(conversation_id, "I could not check that safely, so I did not save it.")
+            await _db.audit("judge_error", proposal.intent, repr(exc))
+            return "judge_error"
+    old = sentences(entry.content)
+    adds, repl, again = [], [], []
+    for s, (word, i) in zip(new, verdicts):
+        if word == "same":
+            continue
+        if word == "refused" and user:                  # they say it themselves now: it is theirs to add
+            adds.append(s)
+            again.append(said_no[i])
+        elif word == "refused":
+            counts["refused"] += 1
+        elif word == "contradicts":
+            repl.append({"op": "replace", "text": s, "replaces": old[i]})
+        else:
+            adds.append(s)
+    if details is not None:
+        details.update(counts)
+    if not adds and not repl:                           # nothing new in words; its links may still be new
+        if counts["refused"]:
+            await _db.audit("refused_again", kind, f"{counts['refused']} statement(s) by {author}")
+            return "refused"
+        links = await _new_links(kind, meta.get("links") or [])
+        if links and (consent_level(kind) != "fast_track" or proposal.provenance is Provenance.WORLD):
+            await _links_ask(proposal, kind, links, conversation_id=conversation_id, author=author)
+            return "pending"
+        await _write_links(kind, meta, list(proposal.evidence))
+        await store.log_action(author, "collapsed", proposal.intent, "nothing new")
+        return "collapsed"
+    # the user's own words, or a trusted write into a low-stakes namespace: new statements land now
+    direct = user or (consent_level(kind) == "fast_track" and proposal.provenance is not Provenance.WORLD)
+    if direct and adds:
+        async with _db.get_db() as c:
+            await _append(kind, adds, [], provenance=proposal.provenance, evidence=list(proposal.evidence),
+                          meta=meta, change_note=f"added by {author}", conn=c)
+            await c.commit()
+        if user:
+            await store.unrefuse(kind, adds + again)
+        counts["added"] = len(adds)
+    items = ([] if direct else [{"op": "add", "text": s} for s in adds]) + repl
+    if details is not None:
+        details.update(counts, asked=len(items))
+    if not items:
+        return "applied"
+    was = " ".join(dict.fromkeys(i["replaces"] for i in items if i["op"] == "replace")) or None
+    card = replace(proposal, content=" ".join(i["text"] for i in items), meta={**meta, "statements": items})
+    await _raise_ask(card, kind=kind, conversation_id=conversation_id, author=author, origin="statements",
+                     ask_type="statements", existing=was,
+                     existing_snapshot=json.dumps({"kind": kind, "content": was}) if was else None,
+                     note=_link_note(meta) or None)
+    return "conflict" if repl else "pending"
+
+
 async def _judged_apply(proposal, *, conversation_id, author, judge, message,
                         details=None) -> str:
+    if proposal.intent.startswith("structured:") and hasattr(judge, "statements"):
+        kind = proposal.intent.split(":", 1)[1]
+        entry = next((e for e in await store.get_structured(kind) if e.kind == kind), None)
+        if entry is not None and len(sentences(proposal.content)) <= MAX_STATEMENTS:
+            return await _statements_apply(proposal, entry, conversation_id=conversation_id, author=author,
+                                           judge=judge, message=message, details=details)
     existing = await _slice_for(proposal)
     try:
         decision = await judge(proposal, message=message, existing=existing)
@@ -852,6 +959,9 @@ async def resolve(ask_id: str, *, approved: bool, conversation_id: str | None = 
     if p["ask_type"] == "identity":
         return await _resolve_identity(ask_id, p, approved=approved, edit=(edited or "").strip(), author=author)
     if not approved:
+        if p["ask_type"] == "statements":
+            items = (json.loads(p["meta"]) if p["meta"] else {}).get("statements") or []
+            await store.add_refused(p["kind"], [i["text"] for i in items], source=p["author"])
         await _outcome_row(ask_id, p, approved=False)
         await _delete_pending(ask_id)
         await _db.audit("consent_reject", p["kind"], f"rejected by {author}")
@@ -959,6 +1069,45 @@ async def resolve(ask_id: str, *, approved: bool, conversation_id: str | None = 
         await _outcome_row(ask_id, p, approved=True, extra={"kept": len(kept), "dropped": len(dropped), "held": len(held)})
         await _confirm(p["conversation_id"], f"Saved {len(kept)}." + (f" Dropped {len(dropped)}." if dropped else "")
                        + (f" Already known, kept as is: {', '.join(held)}." if held else ""))
+        return "applied"
+
+    # a statements card: keep or drop PER STATEMENT (`edited` = JSON [{"i": 0, "drop": true}]), or the
+    # user's own words in place of a single statement (`edited` = plain text). Kept statements are added
+    # to the note as it is NOW (a replace swaps the one stored statement); dropped ones are remembered as
+    # refused. One transaction with the ask.
+    if p["ask_type"] == "statements":
+        meta = json.loads(p["meta"]) if p["meta"] else {}
+        items, drops, own = meta.get("statements") or [], set(), False
+        if edit:
+            try:
+                parsed = json.loads(edit)
+                if not isinstance(parsed, list):
+                    raise TypeError("a list of {i, drop}")
+                drops = {int(e["i"]) for e in parsed if isinstance(e, dict) and e.get("drop")}
+                if drops - set(range(len(items))):
+                    await _confirm(p["conversation_id"], "No such statement on this card. The card stays open.")
+                    return "edit_invalid"
+            except (ValueError, KeyError, TypeError):
+                if len(items) != 1:
+                    await _confirm(p["conversation_id"], "I could not read the edits, so the card stays open.")
+                    return "edit_invalid"
+                items, own = [{**items[0], "text": edit}], True      # their own words for the one statement
+        kept = [it for n, it in enumerate(items) if n not in drops]
+        dropped = [it["text"] for n, it in enumerate(items) if n in drops]
+        ev = [] if own else store.evidence_load(p["evidence"])
+        async with _db.get_db() as c:
+            ok = await _append(p["kind"], [i["text"] for i in kept if i["op"] == "add"],
+                               [(i["replaces"], i["text"]) for i in kept if i["op"] == "replace"],
+                               provenance=Provenance.USER_STATED if own else Provenance.USER_INSTRUCTED, evidence=ev,
+                               meta=meta, change_note=f"approved by {author}; proposed by {p['author']}", conn=c)
+            await store.add_refused(p["kind"], dropped, source=p["author"], conn=c)
+            await c.execute("DELETE FROM pending WHERE ask_id=?", (ask_id,))
+            await c.commit()
+        await _outcome_row(ask_id, p, approved=True, extra={"kept": len(kept) if ok else 0, "dropped": len(dropped)})
+        await _db.audit("consent_statements", p["kind"], json.dumps({"kept": len(kept), "dropped": len(dropped)}))
+        await _confirm(p["conversation_id"], "That record is gone, so nothing was saved." if not ok
+                       else "Saved your version." if own
+                       else "Saved." + (f" Dropped {len(dropped)}." if dropped else ""))
         return "applied"
 
     # a retire ask DELETES the belief (dispatched by ask_type). Delete the belief and clear the

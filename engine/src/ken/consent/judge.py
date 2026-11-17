@@ -101,6 +101,48 @@ def _render_existing(existing: list) -> str:
     return "\n".join(lines) if lines else "(nothing comparable stored yet)"
 
 
+# ── statements: how each NEW statement relates to what one record already says ──
+# A verdict is (word, index): ("same", i) says what stored statement i says; ("contradicts", i) gives a
+# different value for the same thing as stored statement i; ("refused", j) repeats refused statement j;
+# ("new", None) is none of these.
+_STATEMENTS_SYSTEM = (
+    "You compare statements about one record. For EACH proposed statement, pick ONE verdict:\n"
+    "- same: a stored statement already says this (same thing, same value), in any words. Give its number as i.\n"
+    "- contradicts: it gives a DIFFERENT value for the same thing as a stored statement (another date, price, "
+    "owner, status). Give that stored statement's number as i. More detail about the same value is NOT a "
+    "contradiction.\n"
+    "- refused: it makes the same claim as a REFUSED statement, in any words. Give its number as i.\n"
+    "- new: none of the above; it adds something the record does not say.\n"
+    "When unsure between same and new, say new. When unsure between contradicts and new, say new.\n"
+    'Reply with ONE JSON object and nothing else: {"verdicts":[{"k":0,"verdict":"same|contradicts|refused|new","i":0}]}'
+)
+_STATEMENT_ASK = ("For proposed statement k={k} only. `new`: the record does not say it. `same:<i>`: stored statement i "
+                  "already says it (same thing, same value). `contradicts:<i>`: a different value for the same thing "
+                  "as stored statement i (more detail about the same value is `new`, not a contradiction). "
+                  "`refused:<j>`: the same claim as refused statement j.")
+MAX_STORED = 60          # stored statements compared in one question (the choice cap is 241)
+MAX_REFUSED = 20
+
+
+def _statement_evidence(new, old, refused, record, message):
+    return {"record": record, "user_message": message or "",
+            "stored": [{"i": i, "text": t} for i, t in enumerate(old)],
+            "refused": [{"j": j, "text": t} for j, t in enumerate(refused)],
+            "proposed": [{"k": k, "text": t} for k, t in enumerate(new)]}
+
+
+def _statement_verdicts(pairs: list, n_new: int, n_old: int, n_refused: int) -> list:
+    """Clean (word, index) pairs: an index out of range, or a missing answer, reads as `new` (never a drop)."""
+    out = [("new", None)] * n_new
+    for k, word, i in pairs:
+        if not isinstance(k, int) or not 0 <= k < n_new:
+            continue
+        limit = n_refused if word == "refused" else n_old
+        if word in ("same", "contradicts", "refused") and isinstance(i, int) and 0 <= i < limit:
+            out[k] = (word, i)
+    return out
+
+
 class LlmJudge:
     """The real judge. Wraps an LLM pinned to the fast tier. Parses a strict JSON
     verdict; anything it cannot parse into a known verdict raises JudgeError, so the
@@ -108,6 +150,17 @@ class LlmJudge:
 
     def __init__(self, llm) -> None:
         self._llm = llm
+
+    async def statements(self, new: list[str], old: list[str], refused: list[str], *, record: str, message: str) -> list:
+        old, refused = old[:MAX_STORED], refused[:MAX_REFUSED]
+        prompt = json.dumps(_statement_evidence(new, old, refused, record, message), ensure_ascii=False, indent=1)
+        try:
+            raw = await self._llm.complete(_STATEMENTS_SYSTEM, [{"role": "user", "content": prompt}])
+            data = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
+            pairs = [(v.get("k"), str(v.get("verdict", "")).strip().lower(), v.get("i")) for v in data["verdicts"]]
+        except Exception as exc:
+            raise JudgeError(f"judge gave no statement verdicts: {exc!r}") from exc
+        return _statement_verdicts(pairs, len(new), len(old), len(refused))
 
     async def __call__(self, proposal, *, message: str, existing: list) -> Decision:
         prompt = (
@@ -216,6 +269,25 @@ class DecisionsJudge:
             f" grounded {float(grounded):.2f}" if grounded is not None else "")
         return Decision(Verdict(verdict), target_id=target or None, reason=reason)
 
+    async def statements(self, new: list[str], old: list[str], refused: list[str], *, record: str, message: str) -> list:
+        """One choice question per proposed statement, all in one call."""
+        old, refused = old[:MAX_STORED], refused[:MAX_REFUSED]
+        choices = [{"value": "new", "description": "the record does not say it"}]
+        choices += [{"value": f"same:{i}", "description": f"says the same as stored [{i}]: {t}"} for i, t in enumerate(old)]
+        choices += [{"value": f"contradicts:{i}", "description": f"a different value for the same thing as stored [{i}]: {t}"}
+                    for i, t in enumerate(old)]
+        choices += [{"value": f"refused:{j}", "description": f"the same claim as refused [{j}]: {t}"} for j, t in enumerate(refused)]
+        questions = [{"type": "choice", "name": f"k{k}", "instructions": _STATEMENT_ASK.format(k=k), "choices": choices}
+                     for k in range(len(new))]
+        answers = await self._client.decide(questions, _statement_evidence(new, old, refused, record, message))
+        if answers is None:
+            raise JudgeError(f"decisions judge failed: {getattr(self._client, 'last_error', None) or 'no answer'}")
+        pairs = []
+        for k in range(len(new)):
+            word, _, idx = str((answers.get(f"k{k}") or {}).get("choice") or "new").partition(":")
+            pairs.append((k, word, int(idx) if idx.isdigit() else None))
+        return _statement_verdicts(pairs, len(new), len(old), len(refused))
+
 
 class FallbackJudge:
     """Ask `primary`; when it cannot reach a verdict (a JudgeError: HTTP error, timeout,
@@ -223,6 +295,13 @@ class FallbackJudge:
 
     def __init__(self, primary: Judge, fallback: Judge) -> None:
         self._primary, self._fallback = primary, fallback
+
+    async def statements(self, new, old, refused, *, record: str, message: str) -> list:
+        try:
+            return await self._primary.statements(new, old, refused, record=record, message=message)
+        except Exception as exc:  # noqa: BLE001 — as __call__: any primary failure falls back
+            _log.warning("primary judge failed on statements, using the fallback: %r", exc)
+            return await self._fallback.statements(new, old, refused, record=record, message=message)
 
     async def __call__(self, proposal, *, message: str, existing: list) -> Decision:
         try:

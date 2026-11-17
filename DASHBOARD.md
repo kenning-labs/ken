@@ -29,6 +29,9 @@ The engine writes the words for you. Show them as they are. Do not build your ow
   `done[0]` or `done[1]` ("Updated Michael").
   A card that changes a value has `existing` (now) and `question` (new). Show both, one above the other.
   `evidence` says where the card came from. Show it folded ("Based on 2 notes").
+  A card with `statements` changes a record statement by statement: each is `{op: "add" | "replace", text,
+  replaces?}`. Show them as a short list. Yes keeps all; to drop some, `decide(card_id, true,
+  edited='[{"i": 1, "drop": true}]')`. What the user drops or refuses is not proposed again.
 - **An overnight item** (`inbox`, with `readable: true`) has task names in place of ids, and dates in plain words
   ("13 Nov, 17:45"). Its `kind` says what it is:
   - `ask`: it needs you. Show `title`, `body` and `quick` (suggested answers; the first one is Ken's pick).

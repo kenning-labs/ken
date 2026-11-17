@@ -30,7 +30,7 @@ from .conversation import bus
 from .llm import build_llm, resolve_model
 from .memory import store
 from .tools.base import Tool
-from .util import display_name, new_id, norm, now_ms, plain_dates, slug, title_of
+from .util import display_name, new_id, norm, now_ms, plain_dates, sentences, slug, title_of
 
 CAP = 6                  # asks + looks a night, at most
 EXPIRE_DAYS = 7          # an item nobody answered closes itself after a week
@@ -433,8 +433,7 @@ def _schema(**p) -> dict:
     return {"type": "object", "properties": {k: {"type": v} for k, v in p.items()}}
 
 
-def _sentences(text: str) -> list[str]:
-    return [x for x in re.split(r"(?<=[.!?])\s+", text.strip()) if x]
+_sentences = sentences
 
 
 async def chat(item_id: str, text: str, *, judge=None, action_id: str | None = None) -> dict:

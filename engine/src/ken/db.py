@@ -209,6 +209,17 @@ CREATE INDEX IF NOT EXISTS idx_agent_log_at ON agent_log(at);
 -- the Dreamer's Inbox: what one night found that needs the user (ask) or is worth a look
 -- (look). The whole item is `body` JSON; `outcome` is how it closed (the user's quick answer,
 -- their own words, or "expired" after a week), which the next night reads so it never asks twice.
+-- A statement the user said No to on a card (or dropped from one). An agent's re-proposal of the
+-- same claim, in the same or other words, is refused without a new card. The user's own words still add it.
+CREATE TABLE IF NOT EXISTS refused (
+  kind       TEXT NOT NULL,            -- the record, e.g. projects.pagewise
+  statement  TEXT NOT NULL,
+  norm       TEXT NOT NULL,
+  source     TEXT,
+  at         INTEGER NOT NULL,
+  PRIMARY KEY (kind, norm)
+);
+
 CREATE TABLE IF NOT EXISTS dream_items (
   id         TEXT PRIMARY KEY,
   night      TEXT NOT NULL,            -- local date of the run, YYYY-MM-DD

@@ -202,8 +202,14 @@ async def test_the_engine_checks_scope_when_a_record_is_created(tmp_path):
 
         async def in_scope(self, kind, text, *, message):
             self.asked.append(kind)
+            self.message = message
             return self.ok
     no = Scoped(False)
+    # a typed write's message is the tool call ('remember {…}'): the judge must not see it as the user's words
+    await gate.apply(Proposal(intent="structured:facts.reading", content="Kim reads The Silk Roads.", provenance=Provenance.USER_INSTRUCTED),
+                     conversation_id=bus.MAIN, author="kip", judge=no, message='remember {"kind": "fact", "note": "Kim reads The Silk Roads."}')
+    assert no.message == "" and no.asked == ["facts.reading"]
+    no.asked.clear()
     run = Proposal(intent="structured:projects.running_plan", content="Kim can jog 10 minutes. Three run-walk sessions a week.",
                    provenance=Provenance.USER_INSTRUCTED)
     assert await gate.apply(run, conversation_id=bus.MAIN, author="kip", judge=no, message="") == "out_of_scope"

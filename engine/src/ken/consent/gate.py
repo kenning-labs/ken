@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from contextvars import ContextVar
 from dataclasses import replace
 from types import SimpleNamespace
@@ -463,8 +464,11 @@ async def _new_record_checks(proposal, kind: str, *, conversation_id, author, ju
                 if not kept:
                     return proposal, "refused"
                 proposal = replace(proposal, content=" ".join(kept))
+        # a typed write's "message" is the tool call itself ('remember {…}'), not the user's words: the
+        # scope question must not read the tool's name as "the user asked to remember this"
+        said = "" if re.match(r"^\w+ \{", message or "") else (message or "")
         if kind.split(".", 1)[0] in _SCOPED_NS and hasattr(judge, "in_scope") \
-                and not await judge.in_scope(kind, proposal.content, message=message):
+                and not await judge.in_scope(kind, proposal.content, message=said):
             await _db.audit("out_of_scope", kind, f"by {author}: {proposal.content[:200]}")
             return proposal, "out_of_scope"
     except Exception as exc:  # noqa: BLE001 — ANY judge failure is loud, never a write

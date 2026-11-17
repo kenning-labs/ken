@@ -46,6 +46,7 @@ async def test_dated_tell_resolves_against_the_message_day(tmp_path, monkeypatch
     assert out["text"] == "noted", out
     assert "This message was said on Wednesday 2026-03-11 09:30" in llm.system
     assert "The current local date and time is Wednesday 2026-03-11 12:00" in llm.system
+    assert "Thu 2026-03-12, Fri 2026-03-13, Sat 2026-03-14" in llm.system    # the days are given, not counted by the model
     (task,) = await store.open_tasks()
     assert task.deadline == local_ms("2026-03-14T17:00")
     async with db.get_db() as c:
@@ -75,3 +76,12 @@ async def test_ken_now_moves_the_lanes(tmp_path, monkeypatch):
     monkeypatch.setenv("KEN_NOW", "2026-03-15T08:00")                  # read per call: no restart
     (row,) = json.loads(await mcp_server.tasks())["tasks"]
     assert row["lane"] == "overdue"
+
+
+def test_the_calendar_names_each_weekday_of_the_next_two_weeks():
+    from datetime import datetime
+
+    from ken.agents.assistant import _calendar
+    line = _calendar(datetime(2026, 11, 17, 16, 0))                    # noqa: DTZ001 — local, as the prompt; a Tuesday
+    assert "Wed 2026-11-18" in line and "Fri 2026-11-20" in line and "Sat 2026-11-21" in line
+    assert "Tue 2026-11-17" not in line and "Tue 2026-12-01" in line and "2026-12-02" not in line

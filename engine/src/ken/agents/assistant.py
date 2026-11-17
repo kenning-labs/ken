@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .. import config
 from ..captures import Captures
@@ -26,6 +26,14 @@ from . import assistant_view
 from .base import Advice, Agent, OnMessage, OnSchedule, Slice
 
 log = logging.getLogger(__name__)
+
+
+def _calendar(base: datetime) -> str:
+    """The next 14 days with their weekdays, for the system prompt. The model reads a date here; it must not
+    work one out ("by Friday" came back as the Saturday when it counted days itself)."""
+    days = ", ".join(f"{d:%a %Y-%m-%d}" for d in (base + timedelta(days=n) for n in range(1, 15)))
+    return (f"The days after that date: {days}. Read the date of a weekday ('Friday', 'next Tuesday', 'this weekend') "
+            "from this list; never count days yourself. 'Next week' with no day is its Monday.")
 
 
 def _parse_when(when: str) -> int | None:
@@ -623,6 +631,7 @@ class Assistant(Agent):
             system += (f"\nThis message was said on {said:%A %Y-%m-%d %H:%M}: resolve every relative "
                        "date in it ('tomorrow', 'the 14th', 'next Friday', 'this week') against that "
                        "date, not today.")
+        system += "\n" + _calendar(said if ctx.said_at is not None else now_local)
         try:
             reply = (await self._llm.complete(system, messages, tools=tools)).strip()
         except Exception:  # a model error still owes the user a reply

@@ -24,6 +24,7 @@ import asyncio
 import hmac
 import importlib.metadata
 import json
+import os
 import re
 import time
 from collections import Counter
@@ -355,6 +356,15 @@ HYDRATE_PLAN = [
 ]
 
 
+def _hydrate_done() -> str:
+    """What the app says to the user after the last batch is decided: the set-up is over, and where to see it.
+    KEN_APP_URL (optional) = the address of a web app that shows the world (a host sets it; a plain install has none)."""
+    url = (os.environ.get("KEN_APP_URL") or "").strip()
+    where = f"Go back to Ken to see it: {url}" if url else "Ask me anything about it."
+    return ("After the last card is decided, end with exactly one short line to the user: "
+            f"'Your world is ready. {where}' Then stop: do not start new work.")
+
+
 async def hydrate(items: str | list = "", source: str = "hydrate", provenance: str = "agent") -> str:
     """No items: the sweep plan for a fresh world plus progress on a partial one. With items
     (a JSON list of {kind, name, note}, at most ten): one batch through the engine — into an
@@ -372,6 +382,7 @@ async def hydrate(items: str | list = "", source: str = "hydrate", provenance: s
             "batch_size": BATCH,
             "send": "hydrate(items='[{\"kind\": \"person|project|preference|fact\", \"name\": …, "
                     "\"note\": \"one complete sentence\"}, …]') — then relay the card and decide it",
+            "when_done": _hydrate_done(),
         })
     if isinstance(items, str):
         try:

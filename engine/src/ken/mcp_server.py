@@ -961,10 +961,34 @@ def _version() -> str:
         return __version__
 
 
+# What an app shows for each tool, and what the tool does to the user's data. An app asks before a write and
+# warns before a removal, and the app directories require these labels on every tool.
+#   read   = changes nothing            write = adds or changes a record (the judge may raise a card first)
+#   remove = takes something away: a saved belief, or a task off the open list
+TOOL_LABELS = {
+    "tasks": ("List tasks", "read"), "events": ("List events", "read"), "get_context": ("Get the context of a task", "read"),
+    "who_is": ("Look up a person or project", "read"), "world": ("Show everything Ken knows", "read"), "find": ("Search Ken", "read"),
+    "chat_history": ("Read a chat thread with Ken", "read"), "pending": ("List questions for the user", "read"),
+    "inbox": ("List the Inbox", "read"),
+    "add_task": ("Add a task", "write"), "complete_task": ("Mark a task done", "write"),
+    "reschedule_task": ("Move a task's deadline", "write"), "assign_task": ("Give a task an owner", "write"),
+    "link_tasks": ("Make a task wait on another", "write"), "schedule_task": ("Plan a time for a task", "write"),
+    "log_event": ("Log what happened", "write"), "remember": ("Save a person, project, fact or preference", "write"),
+    "tell": ("Tell Ken what happened", "write"), "hydrate": ("Set up the world", "write"),
+    "inbox_chat": ("Answer an Inbox item in words", "write"), "inbox_apply": ("Apply a fix from the Inbox", "write"),
+    "inbox_close": ("Close an Inbox item", "write"), "decide": ("Answer a question for the user", "write"),
+    "discard_task": ("Drop a task", "remove"), "forget": ("Forget a saved belief", "remove"),
+}
+ICONS = (("https://kenninglabs.com/icon-192.png", "image/png", "192x192"), ("https://kenninglabs.com/icon-512.png", "image/png", "512x512"),
+         ("https://kenninglabs.com/favicon.svg", "image/svg+xml", "any"))
+
+
 def build_server():
     from mcp.server.mcpserver import MCPServer  # optional dep: pip install 'ken-engine[mcp]'
+    from mcp.types import Icon, ToolAnnotations
     srv = MCPServer(
-        "ken", version=_version(),
+        "ken", version=_version(), website_url="https://kenninglabs.com",
+        icons=[Icon(src=src, mime_type=kind, sizes=[size]) for src, kind, size in ICONS],
         instructions=("Ken is the user's context engine: their tasks, people, projects, preferences "
                       "and what happened, kept current. Before you work on a task for the user, call "
                       "tasks() then get_context(task_id) and start from it — never ask the user to "
@@ -979,7 +1003,13 @@ def build_server():
                       "made or accepted; advice or how-to steps from a chat are not tasks unless the user "
                       "says they will do them."))
 
-    @srv.tool(name="tasks", description=(
+    def tool(name: str, description: str):
+        title, does = TOOL_LABELS[name]                     # KeyError = a new tool with no label: add it above
+        return srv.tool(name=name, description=description, title=title, annotations=ToolAnnotations(
+            title=title, read_only_hint=does == "read", destructive_hint=does == "remove",
+            open_world_hint=False))                         # Ken reads and writes its own store only
+
+    @tool(name="tasks", description=(
         "The place to look for anything due or open: the user's open tasks with their CURRENT "
         "deadlines (a finished task: find). Each row: (id, text, lane, deadline, slot {start, minutes, by: 'user' when the user set it by hand} when set, missed: true "
         "inside a slot from today that ended with the task open, missed_slot = the start of such a slot "
@@ -995,7 +1025,7 @@ def build_server():
     async def tasks_tool(filter: str = "", status: str = "open", since: str = "") -> str:
         return await tasks(filter, status=status, since=since)
 
-    @srv.tool(name="events", description=(
+    @tool(name="events", description=(
         "What happened in a date window, no word search: live events with their time, newest first. "
         "`since` / `until` = local ISO dates or datetimes; default the last 30 days. `answers`: true adds the "
         "user's answers to cards in the window, newest first (card_id, about, answer, when). An agent token sees "
@@ -1007,7 +1037,7 @@ def build_server():
     async def events_tool(since: str = "", until: str = "", answers: bool = False) -> str:
         return await events(since, until, answers=answers)
 
-    @srv.tool(name="get_context", description=(
+    @tool(name="get_context", description=(
         "Everything that matters for ONE task: the related people, projects and preferences with "
         "the reason and evidence for each; dated events in its window; the last report on it; "
         "questions for you (names Ken cannot place: go find out with your own tools, then tell) "
@@ -1015,13 +1045,13 @@ def build_server():
     async def get_context_tool(task_id: str) -> str:
         return await get_context(task_id)
 
-    @srv.tool(name="who_is", description=(
+    @tool(name="who_is", description=(
         "One person or project by name: note, evidence, recent mentions. Unknown → near matches and "
         "what to check; then tell(...) what you found."))
     async def who_is_tool(name: str) -> str:
         return await who_is(name)
 
-    @srv.tool(name="world", description=(
+    @tool(name="world", description=(
         "The whole map of what Ken knows, as one list: every person, project and asset with its current "
         "notes, its links and its open "
         "tasks (counts: open, late): the tasks on a project, and the tasks that name a person; plus "
@@ -1030,7 +1060,7 @@ def build_server():
     async def world_tool() -> str:
         return await world()
 
-    @srv.tool(name="find", description=(
+    @tool(name="find", description=(
         "A word search for something specific in tasks (open and done), events, people, projects, "
         "preferences: a hit holds at least one query word, best matches first. `beliefs` and open "
         "tasks are the CURRENT state; `events` are dated history, newest first — when they disagree, "
@@ -1039,7 +1069,7 @@ def build_server():
     async def find_tool(query: str) -> str:
         return await find(query)
 
-    @srv.tool(name="add_task", description=(
+    @tool(name="add_task", description=(
         "Add a task. `deadline` = by when it must be done, a local ISO 8601 date or datetime, ONLY "
         "when one is known; a date alone means by that day. It is not a working time: set when the "
         "user works on it with schedule_task. `project` = the name of the user's project it belongs to "
@@ -1056,7 +1086,7 @@ def build_server():
                                         "owner": owner, "at": at},
                            source=source, provenance=provenance, ref=ref)
 
-    @srv.tool(name="complete_task", description=(
+    @tool(name="complete_task", description=(
         "Mark an open task done. Pass `task_id` (the id from `tasks`) when you have it: it is exact. "
         "Else `task` = its text (or a distinctive part). " + _AT))
     async def complete_task_tool(task: str = "", source: str = "", provenance: str = "agent", ref: str = "",
@@ -1064,7 +1094,7 @@ def build_server():
         return await typed("complete_task", {"task": task_id or task, "at": at}, source=source,
                            provenance=provenance, ref=ref)
 
-    @srv.tool(name="discard_task", description=(
+    @tool(name="discard_task", description=(
         "Close an open task that was NOT done: cancelled, no longer needed, a duplicate, a mistake. It "
         "closes as `dropped` with the reason, so history and done counts stay true. Never use "
         "complete_task for this. Pass `task_id` (the id from `tasks`) when you have it, else `task` = its text. " + _AT))
@@ -1073,7 +1103,7 @@ def build_server():
         return await typed("discard_task", {"task": task_id or task, "reason": reason, "at": at}, source=source,
                            provenance=provenance, ref=ref)
 
-    @srv.tool(name="reschedule_task", description=(
+    @tool(name="reschedule_task", description=(
         "Move an open task's deadline (by when) to a new local ISO 8601 date or datetime; a date alone "
         "means by that day. Pass `task_id` (the id from `tasks`) when you have it, else `task` = its "
         "text. To set when the user works on it, use schedule_task. " + _AT))
@@ -1083,7 +1113,7 @@ def build_server():
         return await typed("reschedule_task", {"task": task_id or task, "deadline": deadline or when, "at": at},
                            source=source, provenance=provenance, ref=ref)
 
-    @srv.tool(name="assign_task", description=(
+    @tool(name="assign_task", description=(
         "Change who does an open task: `owner` = a person's name (see world()); empty or 'me' = the user. "
         "An unknown name is kept as given. Pass `task_id` when you have it, else `task` = its text. " + _AT))
     async def assign_task_tool(task: str = "", owner: str = "", task_id: str = "", source: str = "",
@@ -1091,7 +1121,7 @@ def build_server():
         return await typed("assign_task", {"task": task_id or task, "owner": owner, "at": at},
                            source=source, provenance=provenance, ref=ref)
 
-    @srv.tool(name="link_tasks", description=(
+    @tool(name="link_tasks", description=(
         "Say an open task waits on another: `task` (or `task_id`) waits on `depends_on` (an id or a text). "
         "It reads as blocked until that one is closed. `remove`: true drops the dependency. A cycle is "
         "refused (outcome `cycle`). " + _AT))
@@ -1100,7 +1130,7 @@ def build_server():
         return await typed("link_tasks", {"task": task_id or task, "depends_on": depends_on, "remove": remove,
                                           "at": at}, source=source, provenance=provenance, ref=ref)
 
-    @srv.tool(name="schedule_task", description=(
+    @tool(name="schedule_task", description=(
         "Set when the user works on an open task: `start` = a local ISO 8601 datetime, `minutes` = how "
         "long (required, a whole number 1..1440; there is no default). An empty `start` clears the slot. "
         "Slots may overlap. A slot is planning, not world knowledge: it is applied at once for any "
@@ -1113,7 +1143,7 @@ def build_server():
         return await typed("schedule_task", {"task": task_id or task, "start": start, "minutes": minutes, "at": at},
                            source=source, provenance=provenance, ref=ref)
 
-    @srv.tool(name="log_event", description=(
+    @tool(name="log_event", description=(
         "Record something that HAPPENED (append-only history), or an UPCOMING dated happening that is "
         "context rather than a to-do (a trip, a deadline). `when` local ISO 8601, omit for now. "
         "`until` = when it stops mattering (an offer, a trip, a deadline): after that it leaves "
@@ -1124,7 +1154,7 @@ def build_server():
         return await typed("log_event", {"text": text, "when": when, "until": until, "at": at}, source=source,
                            provenance=provenance, ref=ref)
 
-    @srv.tool(name="remember", description=(
+    @tool(name="remember", description=(
         "Save a belief: kind = preference | fact | person | project | asset. A new record in the user's "
         "own words (provenance 'user') is saved at once; a change to a record, or an agent's own "
         "words, is a card the user confirms. `name` = the topic or the entity; `note` = the COMPLETE statement. `links` = a "
@@ -1144,13 +1174,13 @@ def build_server():
             args["url"] = url
         return await typed("remember", args, source=source, provenance=provenance, ref=ref)
 
-    @srv.tool(name="forget", description=(
+    @tool(name="forget", description=(
         "Forget a saved belief by kind and name (a card confirms). `at` = when this was said; older than "
         "the record's last update = `stale`, nothing forgotten."))
     async def forget_tool(kind: str, name: str, source: str = "", provenance: str = "agent", at: str = "") -> str:
         return await typed("forget", {"kind": kind, "name": name, "at": at}, source=source, provenance=provenance)
 
-    @srv.tool(name="tell", description=(
+    @tool(name="tell", description=(
         "Tell Ken what happened, in plain words. With `task_id` it is a REPORT on that task: Ken "
         "records it, then closes, moves or adds a follow-up through cards. `ref` = a permalink to what "
         "you read. `at` = when this was said, for an older message (local ISO date or datetime); "
@@ -1160,7 +1190,7 @@ def build_server():
                         provenance: str = "agent", ref: str = "", at: str = "") -> str:
         return await tell(text, source, task_id=task_id, provenance=provenance, ref=ref, at=at)
 
-    @srv.tool(name="chat_history", description=(
+    @tool(name="chat_history", description=(
         "The recent chat thread one client had with Ken, oldest first: each message it sent with "
         "`source` = that client's tag, and Ken's reply: state answered (reply text), card (the answer was only "
         "cards, in pending), thinking (not handled yet) or none (no answer). "
@@ -1169,7 +1199,7 @@ def build_server():
         rows = await bus.chat(bus.MAIN, _tag(source), max(1, min(int(limit or 30), 100)))
         return json.dumps({"messages": [{**r, "at": _iso(r["at"])} for r in rows]})
 
-    @srv.tool(name="hydrate", description=(
+    @tool(name="hydrate", description=(
         "Set up a fresh world, or continue a partial one. Without items: the sweep plan (who and what "
         "to pull from your own connectors) and what Ken already has. With items: a JSON list of up to "
         "ten {kind: person|project|preference|fact|asset, name, note, links?: [{kind, name, rel}], url?} "
@@ -1178,7 +1208,7 @@ def build_server():
     async def hydrate_tool(items: str = "", source: str = "hydrate", provenance: str = "agent") -> str:
         return await hydrate(items, source=source, provenance=provenance)
 
-    @srv.tool(name="pending", description=(
+    @tool(name="pending", description=(
         "The open cards waiting for the user's decision (an agent token sees only the cards its own writes raised): "
         "`title` (the action, e.g. Save person), `subject` "
         "(the named person/project when the question is only its description), `question`, and the "
@@ -1191,7 +1221,7 @@ def build_server():
         mine = _caller() if _caller().startswith("mcp:agent") else None
         return json.dumps(await pending_cards(channel=mine))
 
-    @srv.tool(name="inbox", description=(
+    @tool(name="inbox", description=(
         "The Dreamer's Inbox: what its nightly read of Ken found. kind ask = needs the user's decision "
         "(quick = answers it suggests, the first its recommendation); kind look = worth knowing, no decision. "
         "Each item cites its evidence, with task ids you can act on. `status`: open (default) | closed (with the outcome) | all. "
@@ -1203,7 +1233,7 @@ def build_server():
         items = await dream.items(str(status or "open").lower())
         return json.dumps({"items": await dream.readable(items) if readable else items}, ensure_ascii=False)
 
-    @srv.tool(name="inbox_chat", description=(
+    @tool(name="inbox_chat", description=(
         "Talk with the Dreamer about one open Inbox item: a quick answer the user tapped, or their own words. "
         "The Dreamer answers and carries out what the user asks (move, close, drop, add or book tasks), then "
         "closes the item when the talk reaches a decision. Returns the reply, whether the item closed, what was "
@@ -1211,7 +1241,7 @@ def build_server():
     async def inbox_chat_tool(item_id: str, text: str) -> str:
         return await inbox_chat(item_id, text)
 
-    @srv.tool(name="inbox_apply", description=(
+    @tool(name="inbox_apply", description=(
         "Apply one proposed fix from the Inbox (kind tidy): its `add` is appended to the record's note as it "
         "is now, with its links. Pass `add` to apply the user's own version of the sentences instead (after "
         "they changed the wording); the item then shows what was applied. The user's tap is the consent, so nothing waits for a second yes. If an "
@@ -1220,7 +1250,7 @@ def build_server():
     async def inbox_apply_tool(item_id: str, add: str | None = None) -> str:
         return await inbox_apply(item_id, add)
 
-    @srv.tool(name="inbox_close", description=(
+    @tool(name="inbox_close", description=(
         "Close one Inbox item with the user's answer: a quick answer they picked, or their own words. The "
         "Dreamer reads it the next night and never asks the same again. Carry out the answer with the other "
         "tools first (move, close or add tasks), then close the item. The user's token only."))
@@ -1232,7 +1262,7 @@ def build_server():
         return json.dumps({"outcome": "closed" if ok else "no_item",
                            "text": "closed" if ok else f"no open Inbox item {item_id!r}"})
 
-    @srv.tool(name="decide", description=(
+    @tool(name="decide", description=(
         "Answer one card on the user's behalf after asking them: approved true/false; `edited` = the "
         "user's corrected value on an approve."))
     async def decide_tool(card_id: str, approved: bool, edited: str = "") -> str:

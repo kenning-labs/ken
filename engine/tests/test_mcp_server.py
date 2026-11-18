@@ -410,6 +410,7 @@ async def test_hydrate_plan_then_one_card_per_batch_then_per_item_decide(tmp_pat
     fresh = json.loads(await mcp_server.hydrate())
     assert fresh["state"] == "fresh" and fresh["have"] == {"people": 0, "projects": 0, "preferences": 0, "facts": 0, "assets": 0}
     assert len(fresh["plan"]) == 5 and fresh["open_batches"] == [] and fresh["batch_size"] == 10
+    assert "Your world is ready. Ask me anything about it." in fresh["when_done"]      # a plain install: no web app to send to
     assert json.loads(await mcp_server.hydrate("not json"))["outcome"] == "invalid"
     eng = Engine(); eng.register_agent(Assistant(llm=None), assistant=True)
 
@@ -938,3 +939,10 @@ def test_the_server_names_its_icon_and_website():
     low = mcp_server.build_server()._lowlevel_server
     assert low.website_url == "https://kenninglabs.com"
     assert low.icons[0].src == "https://kenninglabs.com/icon-192.png" and all(i.src.startswith("https://") for i in low.icons)
+
+
+async def test_hydrate_says_where_to_go_when_a_host_has_a_web_app(tmp_path, monkeypatch):
+    await _setup(tmp_path)
+    monkeypatch.setenv("KEN_APP_URL", "https://app.example.com")
+    done = json.loads(await mcp_server.hydrate())["when_done"]
+    assert "Your world is ready. Go back to Ken to see it: https://app.example.com" in done and "do not start new work" in done

@@ -306,7 +306,7 @@ What changes when we host it:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-dark.png">
-  <img alt="ken-bench, preview run: what is true today? Current-state score from 0 to 1: Ken 0.92, a to-do file 0.89, mem0 0.87. False reports stored, mean per run: Ken 0, to-do file 6.8, mem0 6.6. Ken asks the user 53 questions in 16 weeks; the others ask nothing." src=".github/assets/bench-light.png" width="100%">
+  <img alt="ken-bench, preview run: what is true today? Score out of 100, one dot is one point: Ken 92, a to-do file 89, mem0 87. False reports stored, mean per run: Ken 0, to-do file 6.8, mem0 6.6. Ken asks you 53 questions in 16 weeks; the others ask nothing." src=".github/assets/bench-light.png" width="100%">
 </picture>
 
 **A preview, and our own benchmark.** We wrote [ken-bench](https://github.com/kenning-labs/ken-bench)

@@ -916,3 +916,25 @@ async def test_typed_write_without_an_engine_is_queued_not_failed(tmp_path):
 
 def test_server_reports_the_package_version():
     assert mcp_server.build_server()._lowlevel_server.version
+
+
+def test_every_tool_says_what_it_does_to_the_users_data():
+    """The app directories (Claude, ChatGPT) want a title and explicit read / remove hints on every tool."""
+    srv = mcp_server.build_server()
+    tools = {t.name: t.model_dump(by_alias=True, exclude_none=True) for t in asyncio.run(srv.list_tools())}
+    assert set(tools) == set(mcp_server.TOOL_LABELS) == set(mcp_server.TOOL_NAMES)
+    for name, tool in tools.items():
+        title, does = mcp_server.TOOL_LABELS[name]
+        hints = tool["annotations"]
+        assert tool["title"] == title == hints["title"] and len(name) <= 64, name
+        assert hints["readOnlyHint"] is (does == "read") and hints["destructiveHint"] is (does == "remove"), name
+        assert hints["openWorldHint"] is False, name
+    reads = {n for n, (_, does) in mcp_server.TOOL_LABELS.items() if does == "read"}
+    assert reads == {"tasks", "events", "get_context", "who_is", "world", "find", "chat_history", "pending", "inbox"}
+    assert {n for n, (_, does) in mcp_server.TOOL_LABELS.items() if does == "remove"} == {"discard_task", "forget"}
+
+
+def test_the_server_names_its_icon_and_website():
+    low = mcp_server.build_server()._lowlevel_server
+    assert low.website_url == "https://kenninglabs.com"
+    assert low.icons[0].src == "https://kenninglabs.com/icon-192.png" and all(i.src.startswith("https://") for i in low.icons)

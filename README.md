@@ -317,21 +317,24 @@ Each scenario is 16 weeks of one person's life: 4 projects, about 25 tasks and a
 written as chats, emails and Slack messages. Dates move, tasks get done in other words, and other
 people report things that are not true. The same agent (DeepSeek V4.1 Flash) reports every day
 into each system through that system's own tools. At 4 checkpoints we ask what is true today.
-4 scenarios × 3 runs, on seeds we did not use while we built the benchmark.
+4 scenarios × 3 runs, on seeds we did not use while we built the benchmark. "Whole history" is no memory system at
+all: the same model with every chat, email and Slack message in its prompt.
 
-| Mean per run | Ken | to-do file | mem0 |
-|---|---|---|---|
-| Planted false values found in the store | **0** | 6.8 | 6.6 |
-| Answers that repeat a planted false value | **0** | 1.8 | 1.3 |
-| Answers that give an out-of-date value | 1.0 | **0** | **0** |
-| **Current-state score**, all questions (0 to 1) | **0.92** | 0.89 | 0.87 |
-| · Which tasks are open? | **0.90** | 0.75 | 0.84 |
-| · Which tasks are due by a date? | **0.93** | 0.76 | 0.76 |
-| · Is this task done? (asked in other words) | 0.97 | **0.99** | 0.89 |
-| Yes/no questions put to the user in 16 weeks | 53 | 0 | 0 |
+| Mean per run | Ken | whole history | to-do file | mem0 |
+|---|---|---|---|---|
+| Planted false values found in the store | **0** | n/a | 6.8 | 6.6 |
+| Answers that repeat a planted false value | **0** | 1.8 | 1.8 | 1.3 |
+| Answers that give an out-of-date value | 1.0 | **0** | **0** | **0** |
+| **Current-state score**, all questions (0 to 1) | **0.92** | 0.87 | 0.89 | 0.87 |
+| · Which tasks are open? | **0.90** | **0.90** | 0.75 | 0.84 |
+| · Which tasks are due by a date? | **0.93** | 0.84 | 0.76 | 0.76 |
+| · Is this task done? (asked in other words) | 0.97 | 0.85 | **0.99** | 0.89 |
+| Yes/no questions put to the user in 16 weeks | 53 | 0 | 0 | 0 |
 
 - **False reports stay out.** In 12 runs, no planted false value reached Ken's store. The to-do
   file and mem0 each stored about 7 and repeated 1 to 3 in answers.
+- **The whole history in the prompt is not enough.** With everything in front of it, the same model scored 0.87 and
+  repeated a planted false report in about 2 answers per run. It cannot tell which statement the user confirmed.
 - **The overall gap is small.** Ken leads the to-do file by 0.03, and the to-do file is ahead on
   2 of the 4 scenarios. Most questions are easy for all three.
 - **Ken pays with questions:** about 3 a week, and the user says no to 4 in 10.

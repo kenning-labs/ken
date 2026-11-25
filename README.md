@@ -29,8 +29,7 @@
 <tr>
 <td width="50%" valign="top">
 <b>Run it yourself</b><br>
-Free and open source (AGPL). One SQLite file on your machine, with your own model: OpenAI, any
-OpenAI-compatible API, a local model, or your Claude Code login.<br><br>
+Free and open source (AGPL). One SQLite file on your machine, with a model that you choose.<br><br>
 <a href="#get-started"><b>Get started ↓</b></a>
 </td>
 <td width="50%" valign="top">
@@ -300,18 +299,20 @@ line. **$9.99 a month, flat. Full refund for 30 days.**
 </picture>
 <sub><b>Your world.</b> What your AI apps know about you, as one linked record. Each fact shows the app it came from. Fix a line here, and every app has the new one.</sub>
 
-### Ken checks it while you sleep
+### Ken checks what it keeps
 
-Your apps do not agree with each other, and facts go out of date. Every night Ken reads your whole
-world and looks for what does not fit:
+**When an app writes,** a judge reads the write first. A clear new fact is saved. A copy of something
+Ken already has is merged. A write that contradicts what Ken holds changes nothing until you say
+which one is right: one app says the launch is on the 14th, another says the 21st.
+
+**Every night,** Ken reads your whole world and looks for what a single write cannot show:
 
 - **Two records for one thing.** "Nina" from one app and "Nina Park" from another.
-- **Two apps that disagree.** One says the launch is on the 14th, another says the 21st.
 - **Facts that went stale.** A plan that slipped, a person who changed role.
 - **Small facts worth keeping** that no app wrote down.
 
 In the morning it shows you what it found, with the evidence. You answer with one tap, or in your
-own words. Ken never asks the same thing twice.
+own words, and Ken remembers your answer.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/cloud-ken-dark.png">
@@ -323,7 +324,7 @@ own words. Ken never asks the same thing twice.
 
 <table>
 <tr>
-<td width="33%" valign="top"><b>1. Sign in and pay</b><br>Sign in with Google at <a href="https://kenninglabs.com/?ref=github">kenninglabs.com</a>. You get your own engine in about a minute.</td>
+<td width="33%" valign="top"><b>1. Sign in and pay</b><br>Sign in with Google at <a href="https://kenninglabs.com/?ref=github">kenninglabs.com</a>, then pay $9.99 for the first month. You get your own engine in about a minute.</td>
 <td width="33%" valign="top"><b>2. Connect your AI apps</b><br>Add one address to Claude, ChatGPT or Claude Code. You sign in with Google and press Allow. There is no token to copy.</td>
 <td width="33%" valign="top"><b>3. Say "set up my world"</b><br>Your AI reads what it can already see and proposes your people and projects. You say yes or no.</td>
 </tr>

@@ -4,11 +4,10 @@
 </picture>
 
 <p align="center">
-  Ken is a self-hosted MCP server that keeps the current state of your life: one linked record of
+  Ken is an open-source MCP server that keeps the current state of your life: one linked record of
   your tasks, people, projects and preferences, shared by every AI app you use. Not what was said,
   but what is true now. We call that record "your world".
-  One SQLite file, Python, alpha. It uses a model for its checks: OpenAI, any OpenAI-compatible API,
-  a local model, or your Claude Code login.
+  One SQLite file, Python, alpha. Run it yourself, or let us run it for you.
 </p>
 
 <p align="center">
@@ -25,6 +24,23 @@
   <a href="ARCHITECTURE.md">How it works</a> &nbsp;·&nbsp;
   <a href="https://github.com/kenning-labs/ken/discussions">Discussions</a>
 </p>
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<b>Run it yourself</b><br>
+Free and open source (AGPL). One SQLite file on your machine, with your own model: OpenAI, any
+OpenAI-compatible API, a local model, or your Claude Code login.<br><br>
+<a href="#get-started"><b>Get started ↓</b></a>
+</td>
+<td width="50%" valign="top">
+<b>Ken Cloud</b><br>
+We run it for you: one memory for all your AI apps, always on, and checked every night. $9.99 a
+month, full refund for 30 days.<br><br>
+<a href="https://kenninglabs.com/?ref=github"><b>Set up my Ken →</b></a>
+</td>
+</tr>
+</table>
 
 <br>
 
@@ -272,35 +288,106 @@ to tell you correctly what was saved.
 
 ## Ken Cloud
 
-Rather not run it yourself? We run Ken for you: the same engine as this repo, on a small virtual
-machine and disk of your own in Frankfurt (EU). Sign in with Google, paste one URL into Claude (or
-ChatGPT, where custom connectors are on), and see your day and your world in a web app. Model calls are included, so you need no API
-key. **[Get early access →](https://kenninglabs.com/?ref=github)**
+One memory for all your AI apps, run for you. Claude, ChatGPT and Claude Code read and write the same
+record of your people, projects and things. Ken keeps it current, and you can read and fix every
+line. **$9.99 a month, flat. Full refund for 30 days.**
+
+**[Set up my Ken →](https://kenninglabs.com/?ref=github)** &nbsp;About 5 minutes.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/cloud-day-dark.png">
-  <img alt="The Ken Cloud Today page on a sample day: calendar events and work slots on one timeline (two done, the now line at 10:05), a chat where Ken moved a task after lunch, two cards from Cursor and ChatGPT waiting for yes or no, and to-dos grouped as overdue, today, this week and later." src=".github/assets/cloud-day.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/cloud-world-dark.png">
+  <img alt="The Your world page of the Ken Cloud web app. A list of 24 records: projects, people and things. The project Side project launch is open: a graph of its links to Nina, Sam, Leo, the landing mockups and the launch post draft, then what Ken knows about it in five short sentences, and the apps each fact came from: Claude, Cursor, Slack, ChatGPT." src=".github/assets/cloud-world.png" width="100%">
 </picture>
+<sub><b>Your world.</b> What your AI apps know about you, as one linked record. Each fact shows the app it came from. Fix a line here, and every app has the new one.</sub>
+
+### Ken checks it while you sleep
+
+Your apps do not agree with each other, and facts go out of date. Every night Ken reads your whole
+world and looks for what does not fit:
+
+- **Two records for one thing.** "Nina" from one app and "Nina Park" from another.
+- **Two apps that disagree.** One says the launch is on the 14th, another says the 21st.
+- **Facts that went stale.** A plan that slipped, a person who changed role.
+- **Small facts worth keeping** that no app wrote down.
+
+In the morning it shows you what it found, with the evidence. You answer with one tap, or in your
+own words. Ken never asks the same thing twice.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/cloud-ken-dark.png">
+  <img alt="The Ken page of the web app. On the left, what Ken found overnight in four groups: 3 that need you, 2 to confirm, 2 worth a look, 3 that Ken learned. The open item reads: Nina and Nina Park look like one person. You have two people, both cite the same thread about the landing mockups, and both are designers. Based on 2 notes, from ChatGPT. The answers: Merge them, They are different people, Dismiss, or tell Ken what to do." src=".github/assets/cloud-ken.png" width="100%">
+</picture>
+<sub><b>What Ken found overnight.</b> Here, two records that look like one person. Ken shows why it thinks so, and it changes nothing until you answer.</sub>
+
+### Three steps
+
+<table>
+<tr>
+<td width="33%" valign="top"><b>1. Sign in and pay</b><br>Sign in with Google at <a href="https://kenninglabs.com/?ref=github">kenninglabs.com</a>. You get your own engine in about a minute.</td>
+<td width="33%" valign="top"><b>2. Connect your AI apps</b><br>Add one address to Claude, ChatGPT or Claude Code. You sign in with Google and press Allow. There is no token to copy.</td>
+<td width="33%" valign="top"><b>3. Say "set up my world"</b><br>Your AI reads what it can already see and proposes your people and projects. You say yes or no.</td>
+</tr>
+</table>
+
+The address is the same for everyone:
+
+```
+https://api.kenninglabs.com/mcp
+```
+
+<details>
+<summary><b>How to add it</b> in Claude, ChatGPT and Claude Code</summary>
+
+- **Claude** (web, desktop, phone): Settings, then Connectors, then "Add custom connector". Paste the
+  address.
+- **ChatGPT:** turn on developer mode, then add a connector with the address and choose OAuth.
+- **Claude Code:** `claude mcp add --transport http ken https://api.kenninglabs.com/mcp`, then `/mcp`
+  to sign in.
+
+</details>
+
+<details>
+<summary><b>Tasks, if you want them.</b> Ken is not a to-do app, and you keep your calendar</summary>
+
+When you tell an AI app "I need to review Nina's mockups by Thursday", Ken keeps that too, so the
+next app knows what is open. A Today page shows those tasks next to your calendar. Use it, or ignore
+it: nothing in Ken depends on it, and Ken does not replace your calendar or your to-do list.
+
+<img alt="The Today page: a day timeline with calendar events and a few tasks, and a short list of to-dos for this week." src=".github/assets/cloud-day.png" width="100%">
+
+</details>
+
+### Your machine, or ours
 
 | | Self-hosted | Ken Cloud |
 |---|---|---|
+| **Price** | free, AGPL | $9.99 a month, flat |
 | **Where Ken runs** | your machine | your own virtual machine and disk, Frankfurt (EU) |
-| **Setup** | install, `ken init`, keep `ken` running | sign in with Google |
+| **Setup** | install, `ken init`, keep `ken` running | sign in with Google, about 5 minutes |
 | **Model** | your OpenAI key, Claude Code login or a local model | included |
-| **Connect claude.ai or ChatGPT** | a tunnel or reverse proxy you run | one URL |
-| **Web app** (your day, your world) | not included; [build your own](DASHBOARD.md) | included |
+| **Connect Claude or ChatGPT** | a tunnel or reverse proxy you run, and a token | one address, sign in with Google |
+| **The overnight check** | off by default (`dreamer.enabled`); you answer through your AI app | on, with a page for your answers |
+| **Web app** (your world, what Ken found) | not included; [build your own](DASHBOARD.md) | included |
 | **Updates** | `uv tool upgrade ken-engine` | we deploy them |
+| **Leaving** | it is one file, and it is yours | cancel any time; ask us for your database file |
 
-What changes when we host it:
+<details>
+<summary><b>What changes when we host it:</b> where your data lives, who can reach it, which models see it</summary>
 
-- **Where your world lives:** a 1 GB disk attached only to your machine. Accounts share the sign-in
-  and the URL gateway, not the engine or the database.
-- **Who can reach it:** your own token, and us as the operators of the machine. We do not read it
-  unless you ask us to debug something.
-- **Model calls:** the text of a write goes to OpenAI, under our account, so it can be judged.
+- **Where your world lives:** a 1 GB disk attached only to your machine, in Frankfurt. Accounts share
+  the sign-in and the gateway, not the engine or the database.
+- **Who can reach it:** you, the apps you allowed, and us as the operators of the machine. We do not
+  read it unless you ask us to debug something.
+- **Model calls:** the text of a write goes to DeepSeek and to OpenAI, under our accounts, so it can
+  be judged. Ken's chat and its overnight check run on DeepSeek.
 - **Calendar:** if you link Google Calendar, the gateway keeps its token encrypted and reads today's
   events live for the web app. It stores no events.
+- **Payment:** Creem, our reseller, handles it. We never see your card.
 - **Moving to self-hosting:** ask us, and we hand you your SQLite file to run with `ken`.
+
+[Privacy](https://kenninglabs.com/privacy) · [Terms](https://kenninglabs.com/terms)
+
+</details>
 
 ## Benchmark (preview)
 

@@ -99,6 +99,35 @@ saves its own guess rather than your words, or when the write comes from an agen
 
 Rather not install anything? See [Ken Cloud](#ken-cloud).
 
+**The easy way: your AI installs it.** Paste this into Claude Code, Codex, Cursor or any agent that
+has a terminal on your machine:
+
+```text
+Install Ken, a local MCP memory server, from https://github.com/kenning-labs/ken (README, "Get started"):
+1. You need `git` and `uv`. If `uv --version` fails, install uv: `brew install uv` on macOS with
+   Homebrew, otherwise `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+2. uv tool install 'ken-engine[mcp] @ git+https://github.com/kenning-labs/ken#subdirectory=engine'
+   If `ken` is not found after that, use the folder that `uv tool dir --bin` prints.
+3. Ask me which model Ken should use: my Claude Code login, an OpenAI API key, or none for now
+   (never print a key). Then run `ken init --service` with one of `--claude-code`, `--api-key <key>`
+   or `--no-model`, and with `--add-to-claude` if you are Claude Code, or `--no-claude` if you are not.
+4. If you are not Claude Code, connect yourself: add a stdio MCP server named `ken` that runs the
+   full path of `ken-mcp` (Codex: `codex mcp add ken -- <full path>`).
+5. Ask me if I also use the Claude desktop app. If yes, add `"ken": {"command": "<full path>"}`
+   under `mcpServers` in its `claude_desktop_config.json`, and tell me to restart the app.
+6. Run `ken status`. Tell me whether the engine is live, which server name reaches it, what to say
+   to start, and how to undo the install.
+```
+
+It installs Ken, starts it in the background, connects the agent you pasted it into, and tells you
+how to undo it all.
+
+**In claude.ai, ChatGPT or a phone app?** Those cannot reach your machine. Use
+[Ken Cloud](#ken-cloud) (one address, sign in with Google), or serve your own Ken over HTTPS:
+see *Apps that need a URL* below.
+
+**Or by hand:**
+
 ```bash
 brew install uv     # skip if you have uv. Linux: curl -LsSf https://astral.sh/uv/install.sh | sh
 uv tool install 'ken-engine[mcp] @ git+https://github.com/kenning-labs/ken#subdirectory=engine'
@@ -106,32 +135,12 @@ ken init
 ```
 
 `ken init` asks three things: which model Ken uses, whether to add Ken to Claude Code, and whether
-to run it in the background. Then it tells you what is ready.
+to run it in the background. Then it tells you what is ready. If your agent may not change Claude
+Code's own settings, `ken init` prints the `claude mcp add` command for you to run.
 
 <p align="center">
 <img alt="ken init in a terminal: the KEN wordmark, a model choice (2, your Claude Code login), then four steps marked done: Model, Your data, Claude Code (added as ken), Background (runs now and at every login). Last: Ken is ready, and: in Claude Code, say set up my world." src=".github/assets/ken-init.gif" width="720">
 </p>
-
-<details>
-<summary><b>Let your agent install it</b></summary>
-
-Paste this into Claude Code, Codex or another coding agent:
-
-```text
-Install Ken, a local MCP server, from https://github.com/kenning-labs/ken (README, "Get started"):
-1. If `uv --version` fails, install uv: `brew install uv` on macOS with Homebrew, otherwise
-   `curl -LsSf https://astral.sh/uv/install.sh | sh`.
-2. uv tool install 'ken-engine[mcp] @ git+https://github.com/kenning-labs/ken#subdirectory=engine'
-3. Ask me which model Ken should use: my Claude Code login, or an OpenAI API key (never print a key).
-   Then run `ken init --claude-code --add-to-claude --service`, or `ken init --api-key <key>
-   --add-to-claude --service`.
-4. Run `ken status` and `claude mcp list`. Tell me whether the engine is live and which server name
-   reaches it, then what to say to start and how to undo the install.
-```
-
-If your agent may not change Claude Code's own settings, `ken init` prints the `claude mcp add`
-command for you to run.
-</details>
 
 <details>
 <summary><b>More about the install:</b> the model, other setups, running Ken by hand</summary>
